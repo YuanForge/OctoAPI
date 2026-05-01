@@ -18,6 +18,7 @@ import (
 	"fanapi/internal/billing"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
+	"fanapi/internal/notify"
 	"fanapi/internal/protocol"
 	"fanapi/internal/script"
 	"fanapi/internal/service"
@@ -739,6 +740,15 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		if fatal {
 			_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
 			log.Printf("[llm] disable channel id=%d fatal_err=%q status=%d", channelID, bizErr, resp.StatusCode)
+			_ = service.PatchChannelActive(c.Request.Context(), channelID, false)
+			log.Printf("[llm] disable channel id=%d fatal_err=%q status=%d", channelID, bizErr, resp.StatusCode)
+			go func(name string, id int64, reason string) {
+				// 防止通知失败阻塞主流程
+				defer func() { recover() }()
+				if err := notify.SendLarkChannelDisabled(name, id, reason); err != nil {
+					log.Printf("[lark notify] failed: %v", err)
+				}
+			}(ch.Name, ch.ID, bizErr)
 		}
 
 		// 5xx 总是尝试换渠道；4xx 仅在 error_script 命中时换（fatal 或普通业务错误均触发）。
