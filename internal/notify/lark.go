@@ -1,12 +1,11 @@
 package notify
-package notify
 
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
-	"log"
 )
 
 const larkWebhook = "https://open.larksuite.com/open-apis/bot/v2/hook/a367d5fd-3a7c-4c73-b8ed-be22e19b4c32"
@@ -23,16 +22,16 @@ func SendLarkChannelDisabled(channelName string, channelID int64, reason string)
 				map[string]interface{}{
 					"alt": map[string]interface{}{
 						"content": "",
-						"tag": "plain_text",
+						"tag":     "plain_text",
 					},
 					"img_key": "img_v2_bfd72a81-1533-4699-995d-12a675708d0g",
-					"tag": "img",
+					"tag":     "img",
 				},
 				map[string]interface{}{
 					"tag": "div",
 					"text": map[string]interface{}{
-						"content": "渠道【" + channelName + "】(ID: " +  string(rune(channelID)) + ") 因余额不足已被自动停用。\n原因: " + reason + "\n请及时处理。",
-						"tag": "lark_md",
+						"content": "渠道【" + channelName + "】(ID: " + string(rune(channelID)) + ") 因余额不足已被自动停用。\n原因: " + reason + "\n请及时处理。",
+						"tag":     "lark_md",
 					},
 				},
 				map[string]interface{}{
@@ -41,19 +40,19 @@ func SendLarkChannelDisabled(channelName string, channelID int64, reason string)
 							"tag": "button",
 							"text": map[string]interface{}{
 								"content": "立即推荐好书",
-								"tag": "plain_text",
+								"tag":     "plain_text",
 							},
 							"type": "primary",
-							"url": "https://open.larksuite.com/",
+							"url":  "https://open.larksuite.com/",
 						},
 						map[string]interface{}{
 							"tag": "button",
 							"text": map[string]interface{}{
 								"content": "查看活动指南",
-								"tag": "plain_text",
+								"tag":     "plain_text",
 							},
 							"type": "default",
-							"url": "https://open.larksuite.com/",
+							"url":  "https://open.larksuite.com/",
 						},
 					},
 					"tag": "action",
@@ -63,7 +62,7 @@ func SendLarkChannelDisabled(channelName string, channelID int64, reason string)
 				"template": "turquoise",
 				"title": map[string]interface{}{
 					"content": "📚晒挚爱好书，赢读书礼金",
-					"tag": "plain_text",
+					"tag":     "plain_text",
 				},
 			},
 		},
