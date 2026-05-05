@@ -28,7 +28,7 @@ import {
 import { adminApi, type AdminUser } from '@/lib/api/admin'
 import { useAsync } from '@/hooks/use-async'
 
-type DialogMode = 'recharge' | 'password' | 'group' | 'rebate' | null
+type DialogMode = 'recharge' | 'password' | 'group' | 'rebate' | 'model_credit' | null
 
 function fmtBalance(user: AdminUser) {
   const raw = user.balance ?? (user.balance_credits !== undefined ? user.balance_credits * 1e6 : undefined)
@@ -53,6 +53,7 @@ export function AdminUsersPage() {
   const [value, setValue] = useState('')
   const [confirmPwd, setConfirmPwd] = useState('')
   const [rebatePct, setRebatePct] = useState('')
+  const [modelName, setModelName] = useState('')
 
   const error = loadError || mutError
 
@@ -61,6 +62,7 @@ export function AdminUsersPage() {
     setDialogMode(mode)
     setValue(mode === 'group' ? (user.group ?? '') : mode === 'recharge' ? '1000000' : '')
     setConfirmPwd('')
+    setModelName('')
     if (mode === 'rebate') {
       const ratio = user.rebate_ratio
       setRebatePct(ratio != null ? String(parseFloat((ratio * 100).toFixed(2))) : '')
@@ -87,6 +89,8 @@ export function AdminUsersPage() {
       } else if (dialogMode === 'rebate') {
         const ratio = rebatePct === '' ? null : parseFloat(rebatePct) / 100
         await adminApi.setUserRebateRatio(activeUser.id, ratio)
+      } else if (dialogMode === 'model_credit') {
+        await adminApi.grantModelCredit(activeUser.id, { model_name: modelName, credits: Number(value) })
       }
       setDialogMode(null)
       setActiveUser(null)
@@ -221,6 +225,9 @@ export function AdminUsersPage() {
                         <Button size="sm" variant="outline" onClick={() => openDialog(row, 'recharge')}>
                           充值
                         </Button>
+                        <Button size="sm" variant="outline" onClick={() => openDialog(row, 'model_credit')}>
+                          赠积分
+                        </Button>
                         <Button size="sm" variant="outline" onClick={() => openDialog(row, 'password')}>
                           改密
                         </Button>
@@ -284,7 +291,9 @@ export function AdminUsersPage() {
                   ? '重置密码'
                   : dialogMode === 'rebate'
                     ? '设置返佣比例'
-                    : '设置定价分组'}
+                    : dialogMode === 'model_credit'
+                      ? '赠送专属模型积分'
+                      : '设置定价分组'}
             </DialogTitle>
             <DialogDescription>
               用户：{activeUser?.username ?? activeUser?.email ?? '-'}
@@ -296,7 +305,38 @@ export function AdminUsersPage() {
             </Alert>
           ) : null}
           <div className="flex flex-col gap-3">
-            {dialogMode === 'rebate' ? (
+            {dialogMode === 'model_credit' ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label>模型名称（routing key）</Label>
+                  <Input
+                    value={modelName}
+                    onChange={(e) => setModelName(e.target.value)}
+                    placeholder="如：claude-opus-4-7"
+                  />
+                  <p className="text-xs text-muted-foreground">填写用户请求时 model 字段的值（渠道展示名或模型名）</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>赠送积分数（credits）</Label>
+                  <Input
+                    value={value}
+                    type="text"
+                    onChange={(e) => setValue(e.target.value)}
+                    placeholder="如：1000000（= ¥1）"
+                  />
+                  {value ? (
+                    <p className="text-xs text-muted-foreground">
+                      {Number(value).toLocaleString()} credits = ¥{(Number(value) / 1e6).toFixed(6)}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setValue('1000000')}>¥1</Button>
+                  <Button size="sm" variant="outline" onClick={() => setValue('10000000')}>¥10</Button>
+                  <Button size="sm" variant="outline" onClick={() => setValue('100000000')}>¥100</Button>
+                </div>
+              </>
+            ) : dialogMode === 'rebate' ? (
               <div className="space-y-1.5">
                 <Label>个人返佣比例（%）</Label>
                 <Input

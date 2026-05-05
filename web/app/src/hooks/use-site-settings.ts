@@ -26,6 +26,7 @@ export type SiteSettings = {
   qrCodeUrl: string
   headerHtml: string
   footerHtml: string
+  showLowPriceKey: boolean
 }
 
 const defaultSettings: SiteSettings = {
@@ -45,6 +46,7 @@ const defaultSettings: SiteSettings = {
   qrCodeUrl: '',
   headerHtml: '',
   footerHtml: '',
+  showLowPriceKey: true,
 }
 
 export function useSiteSettings() {
@@ -79,6 +81,7 @@ export function useSiteSettings() {
           qrCodeUrl: record.qrcode_url || '',
           headerHtml: record.header_html || '',
           footerHtml: record.footer_html || '',
+          showLowPriceKey: record.show_low_price_key !== 'false',
         })
       } catch {
         setSettings(defaultSettings)

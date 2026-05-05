@@ -485,6 +485,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	channelID := ch.ID
 	triedIDs = append(triedIDs, channelID)
 
+	// 捕获用户传入的路由键（用于专属模型积分扣减），必须在模型名覆盖之前保存
+	routingKey, _ := reqData["model"].(string)
+
 	// 用渠道配置的真实模型名覆盖用户传入的路由键
 	if ch.Model != "" {
 		reqData["model"] = ch.Model
@@ -601,26 +604,44 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	totalHold := inputHold + outputHold
 	upstreamCostHold, _ := billing.CalcUpstreamCost(ch, origReqData)
 
+	var modelCreditCharged int64
+	var generalCreditCharged int64
 	if totalHold > 0 {
-		balanceBefore, balanceErr := billing.GetBalance(c.Request.Context(), userID)
-		if balanceErr != nil {
-			log.Printf("[llm-hold] get balance failed user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d err=%v",
-				userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, balanceErr)
-		} else {
-			log.Printf("[llm-hold] try charge user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d balance_before=%d",
-				userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, balanceBefore)
+		// 优先扣减专属模型积分，不足部分再扣通用余额
+		if routingKey != "" {
+			modelCreditCharged, _ = billing.ChargeModelCredit(c.Request.Context(), userID, routingKey, totalHold)
 		}
-		if chargeErr := billing.Charge(c.Request.Context(), userID, totalHold); chargeErr != nil {
+		generalCreditCharged = totalHold - modelCreditCharged
+
+		if generalCreditCharged > 0 {
+			balanceBefore, balanceErr := billing.GetBalance(c.Request.Context(), userID)
 			if balanceErr != nil {
-				log.Printf("[llm-hold] charge failed user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d err=%v",
-					userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, chargeErr)
+				log.Printf("[llm-hold] get balance failed user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d err=%v",
+					userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, balanceErr)
 			} else {
-				log.Printf("[llm-hold] charge failed user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d balance_before=%d err=%v",
-					userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, balanceBefore, chargeErr)
+				log.Printf("[llm-hold] try charge user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d balance_before=%d model_credit_charged=%d",
+					userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, balanceBefore, modelCreditCharged)
 			}
-			c.JSON(http.StatusPaymentRequired, gin.H{"error": chargeErr.Error()})
-			return
+			if chargeErr := billing.Charge(c.Request.Context(), userID, generalCreditCharged); chargeErr != nil {
+				// 退回已扣的模型积分
+				if modelCreditCharged > 0 {
+					_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+				}
+				if balanceErr != nil {
+					log.Printf("[llm-hold] charge failed user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d err=%v",
+						userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, chargeErr)
+				} else {
+					log.Printf("[llm-hold] charge failed user_id=%d channel_id=%d channel=%q model=%q input_hold=%d output_hold=%d total_hold=%d balance_before=%d err=%v",
+						userID, channelID, ch.Name, resolvedModel, inputHold, outputHold, totalHold, balanceBefore, chargeErr)
+				}
+				c.JSON(http.StatusPaymentRequired, gin.H{"error": chargeErr.Error()})
+				return
+			}
 		}
+		// 记录扣款信息，供后续退款时优先还原
+		c.Set("model_credit_routing_key", routingKey)
+		c.Set("model_credit_charged", modelCreditCharged)
+		c.Set("model_credit_general_charged", generalCreditCharged)
 	}
 
 	poolKeyIDVal := int64(0)
@@ -692,7 +713,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 				// 退回已扣的 hold
 				if totalHold > 0 {
-					_ = billing.Refund(c.Request.Context(), userID, totalHold)
+					llmRefundCredits(c, userID, totalHold)
 					_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, model.JSON{"reason": "channel_retry"})
 					_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
 						Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry"})
@@ -756,7 +777,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		if shouldRetry && len(triedIDs) < maxRetries {
 			if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 				if totalHold > 0 {
-					_ = billing.Refund(c.Request.Context(), userID, totalHold)
+					llmRefundCredits(c, userID, totalHold)
 					_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, model.JSON{"reason": "channel_retry"})
 					retryMsg := "channel retry"
 					if bizErr != "" {
@@ -802,7 +823,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 					if len(triedIDs) < maxRetries {
 						if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 							if totalHold > 0 {
-								_ = billing.Refund(c.Request.Context(), userID, totalHold)
+								llmRefundCredits(c, userID, totalHold)
 								_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, model.JSON{"reason": "channel_retry"})
 								_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
 									Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
@@ -873,7 +894,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 						if len(triedIDs) < maxRetries {
 							if nextCh := selectNextChannel(c, reqData, triedIDs, stableChannels); nextCh != nil {
 								if totalHold > 0 {
-									_ = billing.Refund(c.Request.Context(), userID, totalHold)
+									llmRefundCredits(c, userID, totalHold)
 									_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, model.JSON{"reason": "channel_retry"})
 									_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
 										Update(&model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
@@ -1017,7 +1038,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 							})
 					} else {
 						refundAmt := costPerImage * (-delta)
-						_ = billing.Refund(ctx, userID, refundAmt)
+						llmRefundCredits(c, userID, refundAmt)
 						_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund",
 							refundAmt, 0, model.JSON{
 								"reason":      "image_count_adjust",
@@ -1035,7 +1056,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 
 	if usageData == nil {
 		if totalHold > 0 {
-			_ = billing.Refund(ctx, userID, totalHold)
+			llmRefundCredits(c, userID, totalHold)
 			_ = service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", totalHold, upstreamCostHold, model.JSON{"reason": "no_output"})
 		}
 		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status").
@@ -1058,7 +1079,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			if outputCost < 0 {
 				// 实际费用低于预扣：退还多扣部分（常见于 Prompt Cache 命中率较高的场景）
 				refundAmt := -outputCost
-				_ = billing.Refund(ctx, userID, refundAmt)
+				llmRefundCredits(c, userID, refundAmt)
 				upstreamRefund := int64(0)
 				if outputUpstreamCost < 0 {
 					upstreamRefund = -outputUpstreamCost
@@ -1089,7 +1110,7 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			delta := totalHold - actualCost
 			if delta > 0 {
 				// 实际费用低于预估：退还多扣部分
-				_ = billing.Refund(ctx, userID, delta)
+				llmRefundCredits(c, userID, delta)
 				upstreamDelta := upstreamCostHold - actualUpstreamCost
 				if upstreamDelta < 0 {
 					upstreamDelta = 0
@@ -1370,9 +1391,58 @@ func hmacSHA256(key []byte, data string) []byte {
 
 // llmRefundAndAbort 退款并终止请求（上游失败时调用）。
 // corrID 不为空时同步更新 LLMLog 的错误状态。
+// llmRefundCredits 按优先级退款：优先退回通用余额，再退专属模型积分（与扣款顺序相反）。
+// 调用时自动更新 gin context 中记录的已扣款数量，保证多次退款不会重复退回。
+func llmRefundCredits(c *gin.Context, userID, amount int64) {
+	if amount <= 0 {
+		return
+	}
+	ctx := c.Request.Context()
+
+	// 读取本次请求的扣款记录
+	modelCharged := int64(0)
+	if mc, ok := c.Get("model_credit_charged"); ok {
+		if v, ok := mc.(int64); ok {
+			modelCharged = v
+		}
+	}
+	generalCharged := int64(0)
+	if gc, ok := c.Get("model_credit_general_charged"); ok {
+		if v, ok := gc.(int64); ok {
+			generalCharged = v
+		}
+	}
+
+	// 优先退通用余额，再退模型积分
+	generalRefund := int64(0)
+	modelRefund := int64(0)
+	if amount <= generalCharged {
+		generalRefund = amount
+	} else {
+		generalRefund = generalCharged
+		modelRefund = amount - generalCharged
+		if modelRefund > modelCharged {
+			modelRefund = modelCharged
+		}
+	}
+
+	if generalRefund > 0 {
+		_ = billing.Refund(ctx, userID, generalRefund)
+		c.Set("model_credit_general_charged", generalCharged-generalRefund)
+	}
+	if modelRefund > 0 {
+		if rk, ok := c.Get("model_credit_routing_key"); ok {
+			if routingKey, ok := rk.(string); ok && routingKey != "" {
+				_ = billing.RefundModelCredit(ctx, userID, routingKey, modelRefund)
+				c.Set("model_credit_charged", modelCharged-modelRefund)
+			}
+		}
+	}
+}
+
 func llmRefundAndAbort(c *gin.Context, corrID string, userID, credits, upstreamCost, poolKeyIDVal int64, upstreamStatus int, errMsg string) {
 	if credits > 0 {
-		_ = billing.Refund(c.Request.Context(), userID, credits)
+		llmRefundCredits(c, userID, credits)
 		_ = service.WriteTx(c.Request.Context(), userID, 0, 0, poolKeyIDVal, corrID, "refund", credits, upstreamCost, model.JSON{"reason": "upstream_error"})
 	}
 	if corrID != "" {

@@ -222,6 +222,20 @@ func Recharge(ctx context.Context, userID, adminID, credits int64) error {
 	return WriteTx(ctx, userID, 0, 0, 0, "", "recharge", credits, 0, nil)
 }
 
+// GrantModelCredit 为用户赠送指定模型的专属积分（管理员操作）。
+// modelName 为渠道的路由键（display_name 非空时为 display_name，否则为 model）。
+func GrantModelCredit(ctx context.Context, userID int64, modelName string, credits int64) error {
+	return billing.AddModelCredit(ctx, userID, modelName, credits)
+}
+
+// ListModelCredits 返回用户所有模型专属积分记录。
+func ListModelCredits(ctx context.Context, userID int64) ([]model.UserModelCredit, error) {
+	var records []model.UserModelCredit
+	err := db.Engine.Where("user_id = ? AND credits > 0", userID).
+		OrderBy("model_name").Find(&records)
+	return records, err
+}
+
 // ListTransactions 返回用户的分页计费历史。corrID/taskID 非空时分别按对应字段过滤。
 func ListTransactions(ctx context.Context, userID int64, page, pageSize int, corrID, taskID string) ([]model.BillingTransaction, error) {
 	var txs []model.BillingTransaction

@@ -214,6 +214,14 @@ export function AdminSettingsPage() {
                       </div>
                     </FieldRow>
                   ) : null}
+                  <FieldRow label="显示低价密钥类型">
+                    <ToggleField
+                      checked={form.show_low_price_key !== 'false'}
+                      onChange={(v) => set('show_low_price_key', v ? 'true' : 'false')}
+                    >
+                      <Tip>关闭后，用户创建 API 密钥时将不显示「低价密钥」选项</Tip>
+                    </ToggleField>
+                  </FieldRow>
                 </div>
               </TabsContent>
 

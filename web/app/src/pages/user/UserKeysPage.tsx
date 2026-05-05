@@ -40,12 +40,16 @@ import {
 import { copyToClipboard } from '@/lib/clipboard'
 import { userApi, type ApiKeyRecord } from '@/lib/api/user'
 import { useAsync } from '@/hooks/use-async'
+import { useSiteSettings } from '@/hooks/use-site-settings'
 
 export function UserKeysPage() {
   const { data: keys, loading, error: loadError, reload } = useAsync(async () => {
     const response = await userApi.listApiKeys()
     return Array.isArray(response) ? response : response.api_keys ?? response.keys ?? []
   }, [] as ApiKeyRecord[])
+
+  const { settings } = useSiteSettings()
+  const showLowPriceKey = settings.showLowPriceKey
 
   const [mutError, setMutError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
@@ -65,7 +69,8 @@ export function UserKeysPage() {
     setSubmitting(true)
     setMutError('')
     try {
-      const response = await userApi.createApiKey(newKeyName.trim(), newKeyType)
+      const keyType = showLowPriceKey ? newKeyType : 'stable'
+      const response = await userApi.createApiKey(newKeyName.trim(), keyType)
       setCreatedKey(String((response as { key?: string }).key ?? ''))
       setCreateOpen(false)
       setNewKeyName('')
@@ -213,16 +218,18 @@ export function UserKeysPage() {
                 placeholder="例如：我的项目"
               />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label>类型</Label>
-              <NativeSelect
-                value={newKeyType}
-                onChange={(event) => setNewKeyType(event.target.value)}
-              >
-                <option value="low_price">低价密钥</option>
-                <option value="stable">稳定密钥</option>
-              </NativeSelect>
-            </div>
+            {showLowPriceKey ? (
+              <div className="flex flex-col gap-2">
+                <Label>类型</Label>
+                <NativeSelect
+                  value={newKeyType}
+                  onChange={(event) => setNewKeyType(event.target.value)}
+                >
+                  <option value="low_price">低价密钥</option>
+                  <option value="stable">稳定密钥</option>
+                </NativeSelect>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>

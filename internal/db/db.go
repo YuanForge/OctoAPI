@@ -66,6 +66,7 @@ func Init(cfg *config.DBConfig, migrate bool) error {
 		new(model.OcpcPlatform),
 		new(model.Vendor),
 		new(model.WithdrawRequest),
+		new(model.UserModelCredit),
 	); err != nil {
 		return err
 	}

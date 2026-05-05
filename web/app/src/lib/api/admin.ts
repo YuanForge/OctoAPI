@@ -252,6 +252,10 @@ export const adminApi = {
     ),
   rechargeUser: (id: number, amount: number) =>
     http.post<Record<string, unknown>>(`/admin/users/${id}/recharge`, { amount }),
+  grantModelCredit: (id: number, payload: { model_name: string; credits: number }) =>
+    http.post<Record<string, unknown>>(`/admin/users/${id}/model-credits`, payload),
+  listModelCredits: (id: number) =>
+    http.get<{ model_credits?: Array<{ id?: number; model_name?: string; credits?: number }> }>(`/admin/users/${id}/model-credits`),
   resetUserPassword: (id: number, password: string) =>
     http.put<Record<string, unknown>>(`/admin/users/${id}/password`, { password }),
   setUserGroup: (id: number, group: string) =>

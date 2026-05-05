@@ -59,6 +59,7 @@ export function UserProfilePage() {
   }
 
   // 邮箱绑定
+  const isEmailUsername = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile?.username ?? '')
   const [emailInput, setEmailInput] = useState('')
   const [codeInput, setCodeInput] = useState('')
   const [emailError, setEmailError] = useState('')
@@ -66,6 +67,7 @@ export function UserProfilePage() {
   const [countdown, setCountdown] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  useEffect(() => { if (isEmailUsername) setEmailInput(profile!.username) }, [isEmailUsername, profile?.username])
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current) }, [])
 
   async function sendCode() {
@@ -254,10 +256,16 @@ export function UserProfilePage() {
               </div>
             ) : (
               <>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">邮箱地址</label>
-                  <Input type="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="example@email.com" />
-                </div>
+                {isEmailUsername ? (
+                  <div className="rounded-lg bg-muted/60 px-4 py-3 text-sm text-muted-foreground">
+                    将向 <span className="font-medium text-foreground">{profile?.username}</span> 发送验证码
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">邮箱地址</label>
+                    <Input type="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="example@email.com" />
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">验证码</label>
                   <div className="flex gap-2">

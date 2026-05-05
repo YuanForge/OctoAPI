@@ -43,6 +43,11 @@ export function UserBillingPage() {
     return res.balance_credits ?? 0
   }, 0)
 
+  const { data: modelCredits } = useAsync(async () => {
+    const res = await userApi.getModelCredits()
+    return res.model_credits ?? []
+  }, [])
+
   // Recharge State
   const [selectedPlan, setSelectedPlan] = useState<number>(-1)
   const [selectedAmount, setSelectedAmount] = useState<number | ''>('')
@@ -239,6 +244,25 @@ export function UserBillingPage() {
               </CardContent>
             </Card>
           </div>
+
+          {modelCredits.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>专属模型积分</CardTitle>
+                <CardDescription>仅可用于指定模型的专属积分，优先于通用积分消耗</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="divide-y">
+                  {modelCredits.map((mc, i) => (
+                    <div key={mc.id ?? i} className="flex items-center justify-between py-2">
+                      <span className="font-mono text-sm">{mc.model_name}</span>
+                      <span className="font-medium">{formatCredits(mc.credits ?? 0)} 积分</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           {(settings.epayEnabled || settings.payApplyEnabled) && (
             <Card>

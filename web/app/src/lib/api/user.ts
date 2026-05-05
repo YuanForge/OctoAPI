@@ -149,6 +149,12 @@ export interface PaymentOrder {
   paid_at?: string;
 }
 
+export type UserModelCredit = {
+  id?: number
+  model_name?: string
+  credits?: number
+}
+
 export const userApi = {
   getProfile: () => http.get<UserProfileResponse>('/user/profile'),
   getBalance: () => http.get<UserBalanceResponse>('/user/balance'),
@@ -201,4 +207,6 @@ export const userApi = {
   },
   uploadImage: (file: File, category: UploadImageCategory) =>
     uploadAuthedImage('user', file, category),
+  getModelCredits: () =>
+    http.get<{ model_credits?: UserModelCredit[] }>('/user/model-credits'),
 }

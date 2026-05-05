@@ -240,6 +240,17 @@ func (h *AuthHandler) GetBalance(c *gin.Context) {
 	})
 }
 
+// GET /user/model-credits — 查询当前用户的专属模型积分列表
+func (h *AuthHandler) GetModelCredits(c *gin.Context) {
+	userID := c.MustGet("user_id").(int64)
+	records, err := service.ListModelCredits(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"model_credits": records})
+}
+
 // GET /user/transactions
 func (h *AuthHandler) GetTransactions(c *gin.Context) {
 	userID := c.MustGet("user_id").(int64)

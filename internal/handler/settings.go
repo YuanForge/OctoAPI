@@ -29,6 +29,7 @@ var publicSettingKeys = map[string]bool{
 	"default_vendor_commission": true,
 	"wechat_pay_enabled":        true,
 	"alipay_enabled":            true,
+	"show_low_price_key":        true,
 }
 
 // GetSettings returns all settings (admin only).
