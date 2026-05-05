@@ -149,6 +149,9 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	}
 	channelID := ch.ID
 
+	// 捕获用户传入的路由键（用于专属模型积分扣减），必须在模型名覆盖之前保存
+	routingKey, _ := reqData["model"].(string)
+
 	// 用渠道配置的真实模型名覆盖用户传入的路由键。
 	if ch.Model != "" {
 		reqData["model"] = ch.Model
@@ -167,10 +170,22 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	// 计算上游进价成本（用于记录利润，不影响用户扣费）
 	upstreamCost, _ := billing.CalcUpstreamCost(ch, reqData)
 
+	var modelCreditCharged int64
 	if cost > 0 {
-		if chargeErr := billing.Charge(c.Request.Context(), userID, cost); chargeErr != nil {
-			c.JSON(http.StatusPaymentRequired, gin.H{"error": chargeErr.Error()})
-			return
+		// 优先消耗专属模型积分，不足部分再扣通用余额
+		if routingKey != "" {
+			modelCreditCharged, _ = billing.ChargeModelCredit(c.Request.Context(), userID, routingKey, cost)
+		}
+		generalCharge := cost - modelCreditCharged
+		if generalCharge > 0 {
+			if chargeErr := billing.Charge(c.Request.Context(), userID, generalCharge); chargeErr != nil {
+				// 退回已扣的模型积分
+				if modelCreditCharged > 0 {
+					_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+				}
+				c.JSON(http.StatusPaymentRequired, gin.H{"error": chargeErr.Error()})
+				return
+			}
 		}
 	}
 
@@ -181,7 +196,10 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 		pk, pkErr := service.GetOrAssignPoolKey(c.Request.Context(), ch.KeyPoolID, userID)
 		if pkErr != nil {
 			if cost > 0 {
-				_ = billing.Refund(c.Request.Context(), userID, cost)
+				_ = billing.Refund(c.Request.Context(), userID, cost-modelCreditCharged)
+				if modelCreditCharged > 0 {
+					_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+				}
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "号池分配失败: " + pkErr.Error()})
 			return
@@ -217,15 +235,21 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 		RetryChannelIDs: model.Int64Array(retryChannelIDs),
 	}
 	if _, err := db.Engine.Insert(task); err != nil {
-		_ = billing.Refund(c.Request.Context(), userID, cost)
+		if cost > 0 {
+			_ = billing.Refund(c.Request.Context(), userID, cost-modelCreditCharged)
+			if modelCreditCharged > 0 {
+				_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+			}
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建任务失败，请稍后重试"})
 		return
 	}
 
-	// 写计费流水
-	_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyID, corrID, "charge", cost, upstreamCost, 0, model.JSON{
-		"task_id": task.ID,
-		"type":    taskType,
+	// 写计费流水（routing_key 存入 metrics，供 failTaskDB 退款时使用）
+	_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyID, corrID, "charge", cost, upstreamCost, modelCreditCharged, model.JSON{
+		"task_id":     task.ID,
+		"type":        taskType,
+		"routing_key": routingKey,
 	})
 
 	natSubject := fmt.Sprintf("task.%s.%d", taskType, channelID)
@@ -257,10 +281,14 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	if pubErr := mq.Publish(natSubject, msgBytes); pubErr != nil {
 		db.Engine.Where("id = ?", task.ID).Cols("status", "error_msg").Update(&model.Task{Status: "failed", ErrorMsg: "publish error"})
 		if cost > 0 {
-			_ = billing.Refund(c.Request.Context(), userID, cost)
-			_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyID, corrID, "refund", cost, upstreamCost, 0, model.JSON{
-				"task_id": task.ID,
-				"reason":  "publish error",
+			_ = billing.Refund(c.Request.Context(), userID, cost-modelCreditCharged)
+			if modelCreditCharged > 0 {
+				_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
+			}
+			_ = service.WriteTx(c.Request.Context(), userID, channelID, apiKeyIDVal, poolKeyID, corrID, "refund", cost, upstreamCost, modelCreditCharged, model.JSON{
+				"task_id":     task.ID,
+				"routing_key": routingKey,
+				"reason":      "publish error",
 			})
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "任务投递失败，请稍后重试"})

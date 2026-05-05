@@ -140,17 +140,26 @@ func handleResult(msg *nats.Msg) {
 				if res.CreditsCharged > 0 {
 					var chargeTx model.BillingTransaction
 					upstreamCostOld := int64(0)
-					if found, _ := db.Engine.Where("corr_id = ? AND type = ?", res.CorrID, "charge").Get(&chargeTx); found {
-						upstreamCostOld = chargeTx.Cost
+				mcChargedOld := int64(0)
+				routingKeyOld := ""
+				if found, _ := db.Engine.Where("corr_id = ? AND type = ?", res.CorrID, "charge").Get(&chargeTx); found {
+					upstreamCostOld = chargeTx.Cost
+					mcChargedOld = chargeTx.ModelCreditCharged
+					if rk, ok := chargeTx.Metrics["routing_key"].(string); ok {
+						routingKeyOld = rk
 					}
-					_ = billing.Refund(ctx, res.UserID, res.CreditsCharged)
-					_ = service.WriteTx(ctx, res.UserID, res.ChannelID, res.APIKeyID, res.PoolKeyID, res.CorrID, "refund", res.CreditsCharged, upstreamCostOld, 0, model.JSON{
-						"task_id": res.TaskID,
-						"reason":  "stable_key_channel_retry",
-					})
 				}
-
-				// 按新渠道重新计费
+				if mcChargedOld > 0 && routingKeyOld != "" {
+					_ = billing.RefundModelCredit(ctx, res.UserID, routingKeyOld, mcChargedOld)
+				}
+				generalRefundOld := res.CreditsCharged - mcChargedOld
+				if generalRefundOld > 0 {
+					_ = billing.Refund(ctx, res.UserID, generalRefundOld)
+				}
+				_ = service.WriteTx(ctx, res.UserID, res.ChannelID, res.APIKeyID, res.PoolKeyID, res.CorrID, "refund", res.CreditsCharged, upstreamCostOld, mcChargedOld, model.JSON{
+					"task_id":     res.TaskID,
+					"routing_key": routingKeyOld,
+					"reason":      "stable_key_channel_retry",
 				var userGroup string
 				var task model.Task
 				if found, _ := db.Engine.ID(res.TaskID).Cols("request").Get(&task); found {
@@ -168,19 +177,36 @@ func handleResult(msg *nats.Msg) {
 					_ = msg.Ack()
 					return
 				}
+				// 路由键：取原始 payload 中的模型字段（未被渠道覆盖）。
+				// 当前重试或第一次请求均使用同一个路由键。
+				newRoutingKey := ""
+				if rk, ok := res.Payload["model"].(string); ok {
+					newRoutingKey = rk
+				}
+				var newModelCreditCharged int64
 				if newCost > 0 {
-					if chargeErr := billing.Charge(ctx, res.UserID, newCost); chargeErr != nil {
-						log.Printf("[result-proc] task %d: charge for retry channel %d failed: %v, marking failed", res.TaskID, nextChannelID, chargeErr)
-						failTaskDB(ctx, res.TaskID, res.UserID, res.ChannelID, res.APIKeyID, res.CorrID, 0, res.ErrorMsg)
-						_ = msg.Ack()
-						return
+					if newRoutingKey != "" {
+						newModelCreditCharged, _ = billing.ChargeModelCredit(ctx, res.UserID, newRoutingKey, newCost)
+					}
+					generalNewCharge := newCost - newModelCreditCharged
+					if generalNewCharge > 0 {
+						if chargeErr := billing.Charge(ctx, res.UserID, generalNewCharge); chargeErr != nil {
+							log.Printf("[result-proc] task %d: charge for retry channel %d failed: %v, marking failed", res.TaskID, nextChannelID, chargeErr)
+							if newModelCreditCharged > 0 {
+								_ = billing.RefundModelCredit(ctx, res.UserID, newRoutingKey, newModelCreditCharged)
+							}
+							failTaskDB(ctx, res.TaskID, res.UserID, res.ChannelID, res.APIKeyID, res.CorrID, 0, res.ErrorMsg)
+							_ = msg.Ack()
+							return
+						}
 					}
 				}
 				// 写新的扣费流水
 				newCorrID := res.CorrID + "_r" + fmt.Sprintf("%d", nextChannelID)
-				_ = service.WriteTx(ctx, res.UserID, nextChannelID, res.APIKeyID, 0, newCorrID, "charge", newCost, newUpstreamCost, 0, model.JSON{
+				_ = service.WriteTx(ctx, res.UserID, nextChannelID, res.APIKeyID, 0, newCorrID, "charge", newCost, newUpstreamCost, newModelCreditCharged, model.JSON{
 					"task_id":      res.TaskID,
 					"retry_of":     res.ChannelID,
+					"routing_key":  newRoutingKey,
 					"stable_retry": true,
 				})
 
@@ -277,24 +303,38 @@ func failTaskDB(ctx context.Context, taskID, userID, channelID, apiKeyID int64, 
 		return
 	}
 
-	// 从原收费流水中查询上游成本，使退款流水与收费流水担载相同成本，
-	// 从而保持利润分析中（收费 + 退款）净额为零。
+	// 从原收费流水中查询上游成本、号池、模型积分专属部分及路由键，
+	// 保证退款流水与收费流水对称。
 	var chargeTx model.BillingTransaction
 	upstreamCost := int64(0)
 	poolKeyID := int64(0)
+	mcCharged := int64(0)
+	routingKey := ""
 	if found, _ := db.Engine.Where("corr_id = ? AND type = ?", corrID, "charge").Get(&chargeTx); found {
 		upstreamCost = chargeTx.Cost
 		poolKeyID = chargeTx.PoolKeyID
+		mcCharged = chargeTx.ModelCreditCharged
+		if rk, ok := chargeTx.Metrics["routing_key"].(string); ok {
+			routingKey = rk
+		}
 	}
 
-	if err := billing.Refund(ctx, userID, credits); err != nil {
-		log.Printf("[result-proc] task %d: refund (Redis) failed: %v — proceeding to update DB", taskID, err)
+	// 优先退还专属模型积分，剩余退还通用余额
+	if mcCharged > 0 && routingKey != "" {
+		_ = billing.RefundModelCredit(ctx, userID, routingKey, mcCharged)
 	}
-	_ = service.WriteTx(ctx, userID, channelID, apiKeyID, poolKeyID, corrID, "refund", credits, upstreamCost, 0, model.JSON{
-		"task_id": taskID,
-		"reason":  errMsg,
+	generalRefund := credits - mcCharged
+	if generalRefund > 0 {
+		if err := billing.Refund(ctx, userID, generalRefund); err != nil {
+			log.Printf("[result-proc] task %d: refund (Redis) failed: %v — proceeding to update DB", taskID, err)
+		}
+	}
+	_ = service.WriteTx(ctx, userID, channelID, apiKeyID, poolKeyID, corrID, "refund", credits, upstreamCost, mcCharged, model.JSON{
+		"task_id":     taskID,
+		"routing_key": routingKey,
+		"reason":      errMsg,
 	})
-	log.Printf("[result-proc] task %d: refunded %d credits to user %d", taskID, credits, userID)
+	log.Printf("[result-proc] task %d: refunded %d credits (model_credit=%d) to user %d", taskID, credits, mcCharged, userID)
 }
 
 func toJSON(m map[string]interface{}) model.JSON {
