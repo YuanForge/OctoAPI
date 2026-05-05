@@ -32,6 +32,16 @@ export function createHttpClient(role?: Role): HttpClient {
     (error) => {
       if (error.response?.status === 401 && role) {
         clearRoleToken(role)
+        const loginPaths: Record<string, string> = {
+          user: '/login',
+          admin: '/admin/login',
+          agent: '/agent/login',
+          vendor: '/vendor/login',
+        }
+        const loginPath = loginPaths[role]
+        if (loginPath && !window.location.pathname.startsWith(loginPath)) {
+          window.location.href = loginPath
+        }
       }
 
       return Promise.reject(error)

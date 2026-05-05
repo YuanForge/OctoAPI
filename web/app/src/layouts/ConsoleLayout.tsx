@@ -64,7 +64,7 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { useSiteSettings } from '@/hooks/use-site-settings'
-import { clearRoleToken, getRoleToken } from '@/lib/auth/storage'
+import { clearRoleToken, getRoleToken, setSiteModePreference } from '@/lib/auth/storage'
 import { userApi } from '@/lib/api/user'
 
 type NavItem = {
@@ -297,6 +297,18 @@ export function ConsoleLayout({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-36">
+                  {role === 'admin' && (
+                    <DropdownMenuItem onClick={() => { setSiteModePreference('user'); navigate('/dashboard') }}>
+                      <UserRoundIcon data-icon="inline-start" />
+                      用户端
+                    </DropdownMenuItem>
+                  )}
+                  {role === 'user' && !!getRoleToken('admin') && (
+                    <DropdownMenuItem onClick={() => { setSiteModePreference('admin'); navigate('/admin/dashboard') }}>
+                      <SettingsIcon data-icon="inline-start" />
+                      管理端
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem onClick={logout}>
                     <LogOutIcon data-icon="inline-start" />
                     退出登录
