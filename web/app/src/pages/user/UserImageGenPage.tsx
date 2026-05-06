@@ -184,7 +184,7 @@ export function UserImageGenPage() {
         size,
         aspect_ratio: aspectRatio,
       }
-      if (refUrls.length > 0) body.reference_images = refUrls
+      if (refUrls.length > 0) body.refer_images = refUrls
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
