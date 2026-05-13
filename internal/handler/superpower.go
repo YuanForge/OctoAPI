@@ -862,26 +862,25 @@ func runExportTask(taskID int64, host string) {
 			})
 		}
 	case "users":
-		type row struct {
-			ID        int64     `xorm:"id"`
-			Username  string    `xorm:"username"`
-			Email     string    `xorm:"email"`
-			Balance   int64     `xorm:"balance"`
-			Role      string    `xorm:"role"`
-			Status    string    `xorm:"status"`
-			CreatedAt time.Time `xorm:"created_at"`
-		}
-		var records []row
+		var records []model.User
 		db.Engine.Table("users").OrderBy("id ASC").Limit(100000).Find(&records)
 		headers = []string{"ID", "用户名", "邮箱", "余额(CNY)", "角色", "状态", "注册时间"}
 		for _, r := range records {
+			email := ""
+			if r.Email != nil {
+				email = *r.Email
+			}
+			status := "正常"
+			if !r.IsActive {
+				status = "已冻结"
+			}
 			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.ID),
 				r.Username,
-				r.Email,
+				email,
 				fmt.Sprintf("%.6f", float64(r.Balance)/1_000_000),
 				r.Role,
-				r.Status,
+				status,
 				r.CreatedAt.Format("2006-01-02 15:04:05"),
 			})
 		}

@@ -160,13 +160,17 @@ export function AdminCouponsPage() {
             <TableBody>
               {data.coupons.length === 0 ? (
                 <TableEmpty cols={8} Icon={TicketIcon} title="暂无优惠券" description="点击右上角创建。" />
-              ) : data.coupons.map((c) => (
-                <TableRow key={c.id}>
+              ) : data.coupons.map((c) => {
+                const isVoided = c.valid_until != null && new Date(c.valid_until) < new Date()
+                return (
+                <TableRow key={c.id} className={isVoided ? 'opacity-50' : ''}>
                   <TableCell>{c.id}</TableCell>
                   <TableCell className="font-mono text-sm">{c.code}</TableCell>
                   <TableCell className="font-medium">{c.title}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">{discountLabel(c)}</Badge>
+                    {isVoided
+                      ? <Badge variant="secondary">已作废</Badge>
+                      : <Badge variant="outline">{discountLabel(c)}</Badge>}
                   </TableCell>
                   <TableCell>{c.min_amount ? `¥${((c.min_amount ?? 0) / 100).toFixed(2)}` : '-'}</TableCell>
                   <TableCell className="text-right text-sm">
@@ -181,14 +185,17 @@ export function AdminCouponsPage() {
                     {c.id != null ? (
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="outline" onClick={() => openUses(c)}>使用记录</Button>
-                        <Button size="sm" variant="destructive" onClick={() => handleVoid(c.id!)}>
-                          <Trash2Icon className="mr-1 size-3.5" />作废
-                        </Button>
+                        {!isVoided && (
+                          <Button size="sm" variant="destructive" onClick={() => handleVoid(c.id!)}>
+                            <Trash2Icon className="mr-1 size-3.5" />作废
+                          </Button>
+                        )}
                       </div>
                     ) : null}
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           )}
         </Table>
