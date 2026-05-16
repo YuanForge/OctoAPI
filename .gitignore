@@ -17,6 +17,7 @@ docs/swagger.yaml
 # Env / secrets
 .env
 .env.*
+config.yaml
 config.local.yaml
 
 # Logs

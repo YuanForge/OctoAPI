@@ -4,10 +4,10 @@ server:
   jwt_expire_hours: 24
 
 db:
-  host: localhost
+  host: 103.242.15.27
   port: 5432
-  user: postgres
-  password: ww123456
+  user: user_ycFa4c
+  password: password_4ydapb
   dbname: fanapi
   sslmode: disable
   # 生产环境建议调大连接池，避免高并发时连接耗尽
@@ -21,13 +21,19 @@ redis:
   db: 0
 
 nats:
-  url: nats://127.0.0.1:4222
+  url: nats://103.242.15.27:4222
   # memory_storage: true  # 取消注释切换到内存存储（吞吐提升 3-5x，重启丢队列中消息）
   # replicas: 1            # JetStream 流副本数，生产集群建议 3
 
 smtp:
-  host: smtp.example.com
+  host: smtp.exmail.qq.com
   port: 465
-  user: no-reply@example.com
-  password: ""
-  from: "FanAPI <no-reply@example.com>"
+  user: noreply@midaccs.com
+  password: "obYQcyACegpXYQXr"
+  from: "MID CODE <noreply@midaccs.com>"
+
+worker:
+  max_concurrent: 5000   # Script Worker 最大并发任务数，按服务器资源和上游限速调整
+  # subjects:            # 订阅的任务类型，默认全部；专用 Worker 示例：["task.video.*"]
+  #   - task.>
+

@@ -410,6 +410,12 @@ func llmProxy(c *gin.Context) {
 
 	channelIDStr := c.Query("channel_id")
 
+	// 余额前置检查：通用余额 < 0 时直接拒绝，无论模型定价是否为 0
+	if bal, balErr := billing.GetBalance(c.Request.Context(), userID); balErr == nil && bal < 0 {
+		c.JSON(http.StatusPaymentRequired, gin.H{"error": "余额不足，请充值后继续使用"})
+		return
+	}
+
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "读取请求体失败"})

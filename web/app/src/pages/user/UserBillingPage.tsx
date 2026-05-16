@@ -163,9 +163,10 @@ export function UserBillingPage() {
         const type = payMethod === 'wechat' ? 'wxpay' : 'alipay'
         const res = await payApi.createEpayOrder(amount, type)
         if (res.pay_url) {
-          window.open(res.pay_url, '_blank')
+          setPayUrl(res.pay_url)
           setCurrentOutTradeNo(res.out_trade_no || "")
-          setShowPayFrame(true) // Also show to ask user if paid
+          setShowPayFrame(true)
+          window.open(res.pay_url, '_blank', 'noopener,noreferrer')
         }
       }
     } catch (e: any) {

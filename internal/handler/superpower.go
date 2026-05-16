@@ -325,7 +325,17 @@ func AdminListAPIKeys(c *gin.Context) {
 		UserEmail    string `json:"user_email" xorm:"user_email"`
 	}
 	var keys []keyRow
-	total, _ := sess.Count()
+	countSess := engine.Table("api_keys").Join("LEFT", "users", "users.id = api_keys.user_id")
+	if userID != "" {
+		countSess = countSess.Where("api_keys.user_id=?", userID)
+	}
+	switch status {
+	case "active":
+		countSess = countSess.Where("api_keys.is_active=true")
+	case "inactive":
+		countSess = countSess.Where("api_keys.is_active=false AND api_keys.last_used_at > NOW()-INTERVAL '7 days'")
+	}
+	total, _ := countSess.Count()
 	sess.Limit(size, (page-1)*size).Find(&keys)
 
 	c.JSON(http.StatusOK, gin.H{"keys": keys, "total": total})
@@ -612,7 +622,17 @@ func ListAuditLogs(c *gin.Context) {
 	if v := c.Query("action"); v != "" {
 		sess = sess.Where("action=?", v)
 	}
-	total, _ := sess.Count(&model.AdminAuditLog{})
+	countSess := engine.Table("admin_audit_logs")
+	if v := c.Query("admin_id"); v != "" {
+		countSess = countSess.Where("admin_id=?", v)
+	}
+	if v := c.Query("resource_type"); v != "" {
+		countSess = countSess.Where("resource_type=?", v)
+	}
+	if v := c.Query("action"); v != "" {
+		countSess = countSess.Where("action=?", v)
+	}
+	total, _ := countSess.Count(&model.AdminAuditLog{})
 	var logs []model.AdminAuditLog
 	sess.Limit(size, (page-1)*size).Find(&logs)
 	c.JSON(http.StatusOK, gin.H{"logs": logs, "total": total})
@@ -644,7 +664,11 @@ func ListNotifications(c *gin.Context) {
 	if s := c.Query("status"); s != "" {
 		sess = sess.Where("status=?", s)
 	}
-	total, _ := sess.Count(&model.Notification{})
+	countSess := engine.Table("notifications")
+	if s := c.Query("status"); s != "" {
+		countSess = countSess.Where("status=?", s)
+	}
+	total, _ := countSess.Count(&model.Notification{})
 	var items []model.Notification
 	sess.Limit(size, (page-1)*size).Find(&items)
 	c.JSON(http.StatusOK, gin.H{"notifications": items, "total": total})
@@ -713,7 +737,14 @@ func ListAlerts(c *gin.Context) {
 	if t := c.Query("type"); t != "" {
 		sess = sess.Where("type=?", t)
 	}
-	total, _ := sess.Count(&model.Alert{})
+	countSess := engine.Table("alerts")
+	if s := c.Query("status"); s != "" {
+		countSess = countSess.Where("status=?", s)
+	}
+	if t := c.Query("type"); t != "" {
+		countSess = countSess.Where("type=?", t)
+	}
+	total, _ := countSess.Count(&model.Alert{})
 	var items []model.Alert
 	sess.Limit(size, (page-1)*size).Find(&items)
 	c.JSON(http.StatusOK, gin.H{"alerts": items, "total": total})
@@ -1567,7 +1598,33 @@ func AdminListPaymentOrders(c *gin.Context) {
 		model.PaymentOrder `xorm:"extends"`
 		UserEmail          string `json:"user_email" xorm:"user_email"`
 	}
-	total, _ := sess.Count(&model.PaymentOrder{})
+	countSess := engine.Table("payment_orders").Join("LEFT", "users", "users.id = payment_orders.user_id")
+	if s := c.Query("status"); s != "" {
+		countSess = countSess.Where("payment_orders.status=?", s)
+	}
+	if uid := c.Query("user_id"); uid != "" {
+		countSess = countSess.Where("payment_orders.user_id=?", uid)
+	}
+	if email := c.Query("email"); email != "" {
+		countSess = countSess.Where("users.email ILIKE ?", "%"+email+"%")
+	}
+	if pf := c.Query("pay_flat"); pf != "" {
+		countSess = countSess.Where("payment_orders.pay_flat=?", pf)
+	}
+	if pc := c.Query("pay_channel"); pc != "" {
+		countSess = countSess.Where("payment_orders.pay_channel=?", pc)
+	}
+	if startAt != "" {
+		if t, _ := parseDateTime(startAt, false); !t.IsZero() {
+			countSess = countSess.Where("payment_orders.created_at>=?", t)
+		}
+	}
+	if endAt != "" {
+		if t, _ := parseDateTime(endAt, true); !t.IsZero() {
+			countSess = countSess.Where("payment_orders.created_at<=?", t)
+		}
+	}
+	total, _ := countSess.Count(&model.PaymentOrder{})
 	var rows []orderRow
 	sess.Limit(size, (page-1)*size).Find(&rows)
 	c.JSON(http.StatusOK, gin.H{"orders": rows, "total": total})

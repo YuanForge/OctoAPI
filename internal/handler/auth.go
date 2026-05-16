@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fanapi/internal/config"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -22,6 +24,47 @@ type AuthHandler struct {
 
 func NewAuthHandler(cfg *config.ServerConfig, m *mailer.Mailer) *AuthHandler {
 	return &AuthHandler{cfg: cfg, mailer: m}
+}
+
+// formatBindError 将 go-playground/validator 的原始错误转换为中文提示。
+func formatBindError(err error) string {
+	var ve validator.ValidationErrors
+	if !errors.As(err, &ve) {
+		return err.Error()
+	}
+	msgs := make([]string, 0, len(ve))
+	for _, fe := range ve {
+		field := fe.Field()
+		tag := fe.Tag()
+		param := fe.Param()
+		switch field {
+		case "Password":
+			switch tag {
+			case "min":
+				msgs = append(msgs, fmt.Sprintf("密码长度不能少于 %s 位", param))
+			case "max":
+				msgs = append(msgs, fmt.Sprintf("密码长度不能超过 %s 位", param))
+			default:
+				msgs = append(msgs, "密码格式不正确")
+			}
+		case "Username":
+			switch tag {
+			case "min":
+				msgs = append(msgs, fmt.Sprintf("用户名长度不能少于 %s 位", param))
+			case "max":
+				msgs = append(msgs, fmt.Sprintf("用户名长度不能超过 %s 位", param))
+			default:
+				msgs = append(msgs, "用户名格式不正确")
+			}
+		case "Email":
+			msgs = append(msgs, "邮箱格式不正确")
+		case "Code":
+			msgs = append(msgs, "验证码不能为空")
+		default:
+			msgs = append(msgs, field+"不能为空或格式不正确")
+		}
+	}
+	return strings.Join(msgs, "；")
 }
 
 // POST /auth/send-code  — 公用：注册绑定邮箱 / 找回密码前发验证码
@@ -55,7 +98,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		SourceID   string `json:"source_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": formatBindError(err)})
 		return
 	}
 	// 解析邀请人
@@ -189,7 +232,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		Password string `json:"password" binding:"required,min=8,max=128"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": formatBindError(err)})
 		return
 	}
 	if err := service.ResetPasswordByEmail(c.Request.Context(), req.Email, req.Code, req.Password); err != nil {
@@ -545,6 +588,30 @@ func buildPriceDisplay(billingType string, cfg model.JSON) string {
 			return base
 		}
 	case "image":
+		// 优先展示各档位价格（size_prices 有值时）
+		if spRaw, ok := cfg["size_prices"]; ok {
+			var spMap map[string]interface{}
+			switch v := spRaw.(type) {
+			case map[string]interface{}:
+				spMap = v
+			case model.JSON:
+				spMap = map[string]interface{}(v)
+			}
+			parts := make([]string, 0, 4)
+			for _, k := range []string{"1k", "2k", "3k", "4k"} {
+				if raw, exists := spMap[k]; exists {
+					if val, ok2 := numberToFloat64(raw); ok2 && val > 0 {
+						parts = append(parts, fmt.Sprintf("%s ¥%.4f", k, val/1000000))
+					}
+				}
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, " / ") + " / 张"
+			}
+		}
+		if def := toF("default_size_price"); def > 0 {
+			return fmt.Sprintf("¥%.4f / 张起", def/1000000)
+		}
 		base := toF("base_price") / 1000000
 		if base > 0 {
 			return fmt.Sprintf("¥%.4f / 张起", base)
