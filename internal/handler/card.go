@@ -79,6 +79,11 @@ func GenerateCards(c *gin.Context) {
 		return
 	}
 
+	// 获取生成的批次 ID，关联到所有卡密
+	for i := range cards {
+		cards[i].CardBatchID = batch.ID
+	}
+
 	if _, err := sess.Insert(&cards); err != nil {
 		_ = sess.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成卡密失败，请稍后重试"})

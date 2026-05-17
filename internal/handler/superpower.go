@@ -585,15 +585,31 @@ func VoidCard(c *gin.Context) {
 func VoidCardBatch(c *gin.Context) {
 	batchID := c.Param("batch_id")
 	engine := db.Engine
-	res, err := engine.Exec(
-		"UPDATE cards SET status='voided' WHERE batch_id=$1 AND status='unused'", batchID,
-	)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+
+	// 优先按 card_batch_id（数字）关联查询；兼容旧数据（batch_id 字符串）
+	if batchIDInt, err := strconv.ParseInt(batchID, 10, 64); err == nil {
+		// 新数据：按 card_batch_id 作废
+		res, err := engine.Exec(
+			"UPDATE cards SET status='voided' WHERE card_batch_id=$1 AND status='unused'", batchIDInt,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		n, _ := res.RowsAffected()
+		c.JSON(http.StatusOK, gin.H{"ok": true, "voided": n})
+	} else {
+		// 旧数据：按 batch_id（字符串）作废
+		res, err := engine.Exec(
+			"UPDATE cards SET status='voided' WHERE batch_id=$1 AND status='unused'", batchID,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		n, _ := res.RowsAffected()
+		c.JSON(http.StatusOK, gin.H{"ok": true, "voided": n})
 	}
-	n, _ := res.RowsAffected()
-	c.JSON(http.StatusOK, gin.H{"ok": true, "voided": n})
 }
 
 // ─────────────────────────────────────────────
