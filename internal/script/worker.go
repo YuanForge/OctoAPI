@@ -257,7 +257,19 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 }
 
 func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[string]interface{}, int, error) {
-	body, err := json.Marshal(payload)
+	// 允许 requestScript 通过保留字段动态覆盖请求地址/方法/头，
+	// 例如：
+	//   { _url: "https://api.example.com/v1/images/edits", _method: "POST", _headers: {...} }
+	// 这些控制字段不会进入实际请求体。
+	bodyPayload := make(map[string]interface{}, len(payload))
+	for k, v := range payload {
+		if k == "_url" || k == "_method" || k == "_headers" {
+			continue
+		}
+		bodyPayload[k] = v
+	}
+
+	body, err := json.Marshal(bodyPayload)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -268,20 +280,37 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 	}
 	client := &http.Client{Timeout: timeout}
 
-	// 支持 {model} 和 {{}} / {{pool_key}} 占位符，将请求载荷中的模型名 / 号池 Key 注入 URL
+	// 支持 requestScript 动态指定 _url；否则回退到渠道 base_url。
 	targetURL := job.BaseURL
+	if v, ok := payload["_url"].(string); ok && strings.TrimSpace(v) != "" {
+		targetURL = v
+	}
+	// 支持 {model} 和 {{}} / {{pool_key}} 占位符，将请求载荷中的模型名 / 号池 Key 注入 URL
 	if modelVal, ok := job.Payload["model"].(string); ok && modelVal != "" {
 		targetURL = strings.ReplaceAll(targetURL, "{model}", modelVal)
 	}
 	targetURL = ResolveHeaderValue(targetURL, job.PoolKeyValue)
 
-	req, err := http.NewRequest(job.Method, targetURL, bytes.NewReader(body))
+	method := job.Method
+	if v, ok := payload["_method"].(string); ok && strings.TrimSpace(v) != "" {
+		method = v
+	}
+	req, err := http.NewRequest(method, targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// 应用渠道 Header，支持 {{}} / {{pool_key}} 占位符替换
+	headers := make(map[string]interface{}, len(job.Headers)+1)
 	for k, v := range job.Headers {
+		headers[k] = v
+	}
+	if extra, ok := payload["_headers"].(map[string]interface{}); ok {
+		for k, v := range extra {
+			headers[k] = v
+		}
+	}
+	for k, v := range headers {
 		if sv, ok := v.(string); ok {
 			req.Header.Set(k, ResolveHeaderValue(sv, job.PoolKeyValue))
 		}
