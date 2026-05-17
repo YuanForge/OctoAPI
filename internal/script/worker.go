@@ -7,7 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -259,17 +264,18 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[string]interface{}, int, error) {
 	// 允许 requestScript 通过保留字段动态覆盖请求地址/方法/头，
 	// 例如：
-	//   { _url: "https://api.example.com/v1/images/edits", _method: "POST", _headers: {...} }
+	//   { _url: "https://api.example.com/v1/images/edits", _method: "POST", _headers: {...}, _body_type: "multipart/form-data" }
 	// 这些控制字段不会进入实际请求体。
 	bodyPayload := make(map[string]interface{}, len(payload))
 	for k, v := range payload {
-		if k == "_url" || k == "_method" || k == "_headers" {
+		if k == "_url" || k == "_method" || k == "_headers" || k == "_body_type" || k == "_form_fields" || k == "_files" {
 			continue
 		}
 		bodyPayload[k] = v
 	}
 
-	body, err := json.Marshal(bodyPayload)
+	bodyType := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["_body_type"])))
+	body, contentType, err := buildUpstreamBody(job, payload, bodyPayload, bodyType)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -299,7 +305,6 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 	// 应用渠道 Header，支持 {{}} / {{pool_key}} 占位符替换
 	headers := make(map[string]interface{}, len(job.Headers)+1)
 	for k, v := range job.Headers {
@@ -315,6 +320,10 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 			req.Header.Set(k, ResolveHeaderValue(sv, job.PoolKeyValue))
 		}
 	}
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	req.Header.Set("Content-Type", contentType)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -338,6 +347,167 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 		return nil, resp.StatusCode, fmt.Errorf("upstream response not JSON: %w", err)
 	}
 	return result, resp.StatusCode, nil
+}
+
+func buildUpstreamBody(job *model.TaskJob, payload, bodyPayload map[string]interface{}, bodyType string) ([]byte, string, error) {
+	if bodyType == "" || bodyType == "json" || bodyType == "application/json" {
+		body, err := json.Marshal(bodyPayload)
+		return body, "application/json", err
+	}
+
+	if bodyType == "multipart/form-data" || bodyType == "multipart" || bodyType == "form-data" {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		fields := map[string]interface{}{}
+		if rawFields, ok := payload["_form_fields"].(map[string]interface{}); ok && len(rawFields) > 0 {
+			for k, v := range rawFields {
+				fields[k] = v
+			}
+		} else {
+			for k, v := range bodyPayload {
+				if k == "refer_images" {
+					continue
+				}
+				fields[k] = v
+			}
+		}
+		for k, v := range fields {
+			if err := writer.WriteField(k, fmt.Sprint(v)); err != nil {
+				_ = writer.Close()
+				return nil, "", err
+			}
+		}
+
+		files := map[string]interface{}{}
+		if rawFiles, ok := payload["_files"].(map[string]interface{}); ok && len(rawFiles) > 0 {
+			for k, v := range rawFiles {
+				files[k] = v
+			}
+		} else if refs, ok := payload["refer_images"].([]interface{}); ok && len(refs) > 0 {
+			files["image"] = refs[0]
+		} else if refs, ok := payload["refer_images"].([]string); ok && len(refs) > 0 {
+			files["image"] = refs[0]
+		}
+
+		for field, raw := range files {
+			urls := normalizeToStrings(raw)
+			for idx, rawURL := range urls {
+				fileBytes, fileName, fileType, err := readUploadSource(strings.TrimSpace(ResolveHeaderValue(rawURL, job.PoolKeyValue)))
+				if err != nil {
+					_ = writer.Close()
+					return nil, "", fmt.Errorf("multipart file %s[%d] load error: %w", field, idx, err)
+				}
+				partName := field
+				if len(urls) > 1 {
+					partName = fmt.Sprintf("%s[%d]", field, idx)
+				}
+				headers := make(textproto.MIMEHeader)
+				headers.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, partName, fileName))
+				if fileType == "" {
+					fileType = mime.TypeByExtension(strings.ToLower(filepath.Ext(fileName)))
+				}
+				if fileType == "" {
+					fileType = http.DetectContentType(fileBytes)
+				}
+				headers.Set("Content-Type", fileType)
+				part, err := writer.CreatePart(headers)
+				if err != nil {
+					_ = writer.Close()
+					return nil, "", err
+				}
+				if _, err := part.Write(fileBytes); err != nil {
+					_ = writer.Close()
+					return nil, "", err
+				}
+			}
+		}
+
+		if err := writer.Close(); err != nil {
+			return nil, "", err
+		}
+		return buf.Bytes(), writer.FormDataContentType(), nil
+	}
+
+	body, err := json.Marshal(bodyPayload)
+	return body, "application/json", err
+}
+
+func normalizeToStrings(v interface{}) []string {
+	switch vv := v.(type) {
+	case string:
+		if strings.TrimSpace(vv) == "" {
+			return nil
+		}
+		return []string{vv}
+	case []string:
+		out := make([]string, 0, len(vv))
+		for _, item := range vv {
+			if strings.TrimSpace(item) != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(vv))
+		for _, item := range vv {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func readUploadSource(src string) ([]byte, string, string, error) {
+	if src == "" {
+		return nil, "", "", fmt.Errorf("empty source")
+	}
+	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+		resp, err := http.Get(src)
+		if err != nil {
+			return nil, "", "", err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			return nil, "", "", fmt.Errorf("download failed: %s", string(b))
+		}
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, "", "", err
+		}
+		fileName := filenameFromURL(src)
+		if fileName == "" {
+			fileName = "upload"
+		}
+		return data, fileName, resp.Header.Get("Content-Type"), nil
+	}
+
+	localPath := strings.TrimPrefix(src, "/")
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	fileName := filepath.Base(localPath)
+	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
+		fileName = "upload"
+	}
+	return data, fileName, mime.TypeByExtension(strings.ToLower(filepath.Ext(fileName))), nil
+}
+
+func filenameFromURL(rawURL string) string {
+	idx := strings.LastIndex(rawURL, "/")
+	if idx < 0 || idx+1 >= len(rawURL) {
+		return ""
+	}
+	name := rawURL[idx+1:]
+	if name == "" {
+		return ""
+	}
+	return name
 }
 
 // DetectUpstreamError 检测常见厂商错误响应格式。
