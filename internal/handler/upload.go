@@ -83,7 +83,7 @@ func saveUploadedImage(c *gin.Context, category string) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"url": fmt.Sprintf("%s://%s/uploads/%s/%s", scheme, c.Request.Host, category, filename),
+		"url": fmt.Sprintf("/uploads/%s/%s", category, filename),
 	})
 }
 
