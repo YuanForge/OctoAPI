@@ -521,16 +521,42 @@ func AdjustTransaction(c *gin.Context) {
 func ListCardBatches(c *gin.Context) {
 	engine := db.Engine
 	type batchRow struct {
-		model.CardBatch `xorm:"extends"`
-		Used            int `json:"used" xorm:"used"`
+		ID        int64     `json:"id" xorm:"id"`
+		BatchID   string    `json:"batch_id" xorm:"batch_id"`
+		Note      string    `json:"note" xorm:"note"`
+		Credits   int64     `json:"credits" xorm:"credits"`
+		Count     int       `json:"count" xorm:"count"`
+		CreatedBy int64     `json:"created_by" xorm:"created_by"`
+		CreatedAt time.Time `json:"created_at" xorm:"created_at"`
+		Used      int       `json:"used" xorm:"used"`
 	}
 	var rows []batchRow
-	engine.SQL(
+	_ = engine.SQL(
 		`SELECT cb.*, COUNT(c.id) FILTER (WHERE c.status='used') AS used
 		 FROM card_batches cb
 		 LEFT JOIN cards c ON c.batch_id = cb.batch_id
 		 GROUP BY cb.id ORDER BY cb.created_at DESC LIMIT 100`,
 	).Find(&rows)
+
+	// 历史兼容：旧数据可能仅存在 cards.batch_id，而 card_batches 为空。
+	if len(rows) == 0 {
+		_ = engine.SQL(
+			`SELECT
+				MIN(c.id) AS id,
+				c.batch_id AS batch_id,
+				MAX(c.note) AS note,
+				MAX(c.credits) AS credits,
+				COUNT(*) AS count,
+				0 AS created_by,
+				MIN(c.created_at) AS created_at,
+				COUNT(*) FILTER (WHERE c.status='used') AS used
+			 FROM cards c
+			 WHERE c.batch_id IS NOT NULL AND c.batch_id <> ''
+			 GROUP BY c.batch_id
+			 ORDER BY MIN(c.created_at) DESC
+			 LIMIT 100`,
+		).Find(&rows)
+	}
 	c.JSON(http.StatusOK, gin.H{"batches": rows})
 }
 
@@ -589,6 +615,9 @@ func AdminUploadWithdrawalProof(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// 兼容未执行迁移的生产库：按需补齐字段，避免上传凭证时报列不存在。
+	_, _ = db.Engine.Exec("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS proof_url TEXT NOT NULL DEFAULT ''")
+	_, _ = db.Engine.Exec("ALTER TABLE withdraw_requests ADD COLUMN IF NOT EXISTS proof_note TEXT NOT NULL DEFAULT ''")
 	_, err = db.Engine.Exec(
 		"UPDATE withdraw_requests SET proof_url=$1, proof_note=$2, updated_at=NOW() WHERE id=$3",
 		req.ProofURL, req.ProofNote, id,
@@ -924,11 +953,12 @@ func runExportTask(taskID int64, host string) {
 			Credits    int64     `xorm:"credits"`
 			Status     string    `xorm:"status"`
 			PayChannel string    `xorm:"pay_channel"`
+			PayFlat    int       `xorm:"pay_flat"`
 			CreatedAt  time.Time `xorm:"created_at"`
 		}
 		var records []row
 		db.Engine.Table("payment_orders").OrderBy("id DESC").Limit(100000).Find(&records)
-		headers = []string{"ID", "用户ID", "订单号", "金额(元)", "积分", "状态", "支付渠道", "时间"}
+		headers = []string{"ID", "用户ID", "订单号", "金额(元)", "到账金额(¥)", "状态", "支付渠道", "时间"}
 		for _, r := range records {
 			statusZH := r.Status
 			switch r.Status {
@@ -941,14 +971,31 @@ func runExportTask(taskID int64, host string) {
 			case "refunded":
 				statusZH = "已退款"
 			}
+			payChannelZH := r.PayChannel
+			switch r.PayChannel {
+			case "wechat":
+				payChannelZH = "微信支付"
+			case "alipay":
+				payChannelZH = "支付宝"
+			case "epay":
+				payChannelZH = "Epay"
+			case "":
+				if r.PayFlat == 1 {
+					payChannelZH = "微信支付"
+				} else if r.PayFlat == 2 {
+					payChannelZH = "支付宝"
+				} else {
+					payChannelZH = "-"
+				}
+			}
 			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.ID),
 				fmt.Sprintf("%d", r.UserID),
 				r.OutTradeNo,
 				fmt.Sprintf("%.2f", r.Amount),
-				fmt.Sprintf("%d", r.Credits),
+				fmt.Sprintf("%.2f", float64(r.Credits)/1_000_000),
 				statusZH,
-				r.PayChannel,
+				payChannelZH,
 				r.CreatedAt.Format("2006-01-02 15:04:05"),
 			})
 		}

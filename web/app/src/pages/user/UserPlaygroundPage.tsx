@@ -148,11 +148,7 @@ export function UserPlaygroundPage() {
     if (useTopP) body.top_p = topP
 
     try {
-      const channel = currentChannel()
-      const endpoint = channel?.id
-        ? `/v1/chat/completions?channel_id=${channel.id}`
-        : '/v1/chat/completions'
-      const response = await fetch(endpoint, {
+      const response = await fetch('/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

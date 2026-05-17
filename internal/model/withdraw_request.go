@@ -11,6 +11,8 @@ type WithdrawRequest struct {
 	ReviewStage string `xorm:"notnull default('cs_review') 'review_stage'" json:"review_stage"` // cs_review/finance_review/completed
 	PaymentType string `xorm:"notnull default('') 'payment_type'" json:"payment_type"`          // wechat/alipay
 	PaymentQR   string `xorm:"notnull default('') 'payment_qr'" json:"payment_qr"`              // 收款码快照
+	ProofURL    string `xorm:"notnull default('') 'proof_url'" json:"proof_url,omitempty"`      // 财务打款凭证图片
+	ProofNote   string `xorm:"notnull default('') 'proof_note'" json:"proof_note,omitempty"`    // 财务凭证备注
 	AdminRemark string `xorm:"notnull default('') 'admin_remark'" json:"admin_remark,omitempty"`
 	// 客服初审
 	CsReviewerID int64      `xorm:"notnull default(0) 'cs_reviewer_id'" json:"cs_reviewer_id,omitempty"`
