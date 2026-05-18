@@ -18,6 +18,35 @@ import (
 	"github.com/google/uuid"
 )
 
+// requestBaseURL 从请求中推断站点根 URL（如 "https://example.com"），
+// 优先使用 X-Forwarded-Proto 以兼容反向代理场景。
+func requestBaseURL(c *gin.Context) string {
+	scheme := "https"
+	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if c.Request.TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + c.Request.Host
+}
+
+// expandReferImages 将 refer_images 中以 "/" 开头的本地路径补全为完整 URL。
+// 已是完整 URL（http/https 开头）的条目保持不变。
+func expandReferImages(images []string, baseURL string) []string {
+	if len(images) == 0 {
+		return images
+	}
+	expanded := make([]string, len(images))
+	for i, img := range images {
+		if strings.HasPrefix(img, "/") {
+			expanded[i] = baseURL + img
+		} else {
+			expanded[i] = img
+		}
+	}
+	return expanded
+}
+
 // bindImageRequest 将请求 body 解析为 ImageRequest。
 // 先按结构体绑定固定字段（做必填校验），再将原始 JSON 中其余字段写入 Extra，
 // Extra 字段经 ToMap() 合并后透传给 JS 映射脚本。
@@ -333,6 +362,7 @@ func CreateImageTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.ReferImages = expandReferImages(req.ReferImages, requestBaseURL(c))
 	createTask(c, "image", req.ToMap())
 }
 
@@ -359,6 +389,7 @@ func CreateVideoTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.ReferImages = expandReferImages(req.ReferImages, requestBaseURL(c))
 	createTask(c, "video", req.ToMap())
 }
 
