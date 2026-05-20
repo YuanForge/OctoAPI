@@ -1110,8 +1110,8 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 				}
 			}
 		}
-		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "usage").
-			Update(&model.LLMLog{Status: "ok", Usage: model.JSON(usageData)})
+		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "usage", "error_msg").
+			Update(&model.LLMLog{Status: "ok", Usage: model.JSON(usageData), ErrorMsg: ""})
 		return
 	}
 
@@ -1197,8 +1197,8 @@ func llmSettle(c *gin.Context, ch *model.Channel, reqData, usageData map[string]
 			}
 		}
 	}
-	_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "usage").
-		Update(&model.LLMLog{Status: "ok", Usage: model.JSON(usageData)})
+	_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "usage", "error_msg").
+		Update(&model.LLMLog{Status: "ok", Usage: model.JSON(usageData), ErrorMsg: ""})
 }
 
 // buildStreamClientResponse 从上游 SSE 原始行中提取并组装文本内容，
