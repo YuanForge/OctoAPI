@@ -106,7 +106,29 @@ func GetTask(c *gin.Context) {
 	}
 
 	rewrite := getTaskResultURLRewrite()
-	c.JSON(http.StatusOK, buildTaskResult(task, rewrite))
+
+	switch task.Status {
+	case "pending":
+		c.JSON(http.StatusOK, gin.H{"code": 150, "status": 0, "msg": "排队中"})
+	case "processing":
+		c.JSON(http.StatusOK, gin.H{"code": 150, "status": 1, "msg": "生成中"})
+	case "done":
+		result := task.Result
+		if rewrite != nil && len(task.Result) > 0 {
+			result = rewriteJSONStrings(cloneJSON(task.Result), rewrite)
+		}
+		out := gin.H{}
+		for _, k := range []string{"code", "status", "msg", "url"} {
+			if v, ok := result[k]; ok {
+				out[k] = v
+			}
+		}
+		c.JSON(http.StatusOK, out)
+	case "failed":
+		c.JSON(http.StatusOK, gin.H{"code": 500, "status": 3, "msg": service.UserFacingErrorMessage(task.ErrorMsg)})
+	default:
+		c.JSON(http.StatusOK, gin.H{"code": 150, "status": 0, "msg": task.Status})
+	}
 }
 
 // GET /admin/tasks
@@ -533,6 +555,16 @@ func buildTaskResult(task *model.Task, rewrite func(string) string) model.TaskRe
 			}
 		}
 		url, _ := result["url"].(string)
+		// 若 response_script 把 url 映射为数组（如 gpt-image-2），提取第一个元素作为顶层 url
+		// 并把完整数组放入 Items，兼容多图场景
+		if url == "" {
+			if arr, ok := result["url"].([]interface{}); ok && len(arr) > 0 {
+				if s, ok := arr[0].(string); ok {
+					url = s
+				}
+				base.Items = arr
+			}
+		}
 		msg, _ := result["msg"].(string)
 		base.Code = code
 		base.Status = statusVal

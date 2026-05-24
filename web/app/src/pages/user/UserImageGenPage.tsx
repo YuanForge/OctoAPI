@@ -18,6 +18,7 @@ type ImageGenerateResponse = {
   error_msg?: string
   url?: unknown
   urls?: unknown
+  items?: unknown[]
   data?: Array<{ url?: unknown }>
   result?: Record<string, unknown>
 }
@@ -179,7 +180,7 @@ export function UserImageGenPage() {
         const st = data.status
         if (st === 'done' || st === 2) {
           const result = data.result ?? {}
-          const urlList = collectImageSources(result.data, result.urls, result.url, data.urls, data.url)
+          const urlList = collectImageSources(result.data, result.urls, result.url, data.urls, data.url, data.items)
           setImages(urlList)
           setTaskStatus('done')
           setRunning(false)
@@ -284,7 +285,7 @@ export function UserImageGenPage() {
         throw new Error((await response.text()) || `请求失败 (${response.status})`)
       }
       const data = await response.json() as ImageGenerateResponse
-      const syncImages = collectImageSources(data.data, data.urls, data.url, data.result?.data, data.result?.urls, data.result?.url)
+      const syncImages = collectImageSources(data.data, data.urls, data.url, data.items, data.result?.data, data.result?.urls, data.result?.url)
       if (syncImages.length > 0) {
         setImages(syncImages)
         setTaskStatus('done')
