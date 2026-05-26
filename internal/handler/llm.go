@@ -552,6 +552,18 @@ func llmProxy(c *gin.Context) {
 	llmProxyWithChannel(c, ch, reqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
 }
 
+func shouldConvertRequestBody(clientProto, channelProto string, reqData map[string]interface{}) bool {
+	if clientProto != channelProto {
+		return true
+	}
+	if clientProto == protocolResponses && channelProto == protocolResponses {
+		if msgs, ok := reqData["messages"].([]interface{}); ok && len(msgs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // llmProxyWithChannel 执行实际的上游请求，支持失败重试（换渠道）。
 // stableChannels 非空时使用稳定模式（价格升序），否则使用正常负载均衡。
 func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]interface{},
@@ -600,7 +612,7 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	//   必须经 responsesToOpenAI → openAIToResponsesRequest 将 messages 转换为合法的 input 字段，
 	//   否则原始 messages 体直接发往上游 Responses API 会导致 422/502。
 	// passthrough_body=true 时跳过所有转换，直接使用原始请求体字节。
-	needsConversion := clientProto != proto || clientProto == protocolResponses
+	needsConversion := shouldConvertRequestBody(clientProto, proto, reqData)
 	if !ch.PassthroughBody && needsConversion && ch.RequestScript == "" {
 		working := reqData
 		// Step 1: 客户端格式 → OpenAI
