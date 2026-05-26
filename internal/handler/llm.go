@@ -595,9 +595,13 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 
 	// 客户端格式 ≠ 渠道格式时，需要请求格式转换链：
 	//   客户端格式 → OpenAI（若客户端本身就是 OpenAI 则跳过） → 渠道格式（若渠道本身是 OpenAI 则跳过）
-	// 客户端格式 == 渠道格式时直接透传，不做任何转换。
+	// 特例：客户端和渠道都是 responses 协议时，仍需归一化转换：
+	//   客户端可能以 messages 格式（兼容 chat/completions）调用 /v1/responses，
+	//   必须经 responsesToOpenAI → openAIToResponsesRequest 将 messages 转换为合法的 input 字段，
+	//   否则原始 messages 体直接发往上游 Responses API 会导致 422/502。
 	// passthrough_body=true 时跳过所有转换，直接使用原始请求体字节。
-	if !ch.PassthroughBody && clientProto != proto && ch.RequestScript == "" {
+	needsConversion := clientProto != proto || clientProto == protocolResponses
+	if !ch.PassthroughBody && needsConversion && ch.RequestScript == "" {
 		working := reqData
 		// Step 1: 客户端格式 → OpenAI
 		if clientProto != protocolOpenAI {
@@ -1702,5 +1706,12 @@ func llmRefundAndAbort(c *gin.Context, corrID string, userID, credits, upstreamC
 		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "upstream_status", "error_msg").
 			Update(&model.LLMLog{Status: "error", UpstreamStatus: upstreamStatus, ErrorMsg: errMsg})
 	}
-	c.JSON(http.StatusBadGateway, gin.H{"error": userMsg})
+	// 根据错误类型返回语义准确的 HTTP 状态码：
+	// - 上游超时（context deadline exceeded / Client.Timeout）→ 504 Gateway Timeout
+	// - 其他上游失败 → 502 Bad Gateway
+	statusCode := http.StatusBadGateway
+	if strings.Contains(errMsg, "context deadline exceeded") || strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "Timeout") {
+		statusCode = http.StatusGatewayTimeout
+	}
+	c.JSON(statusCode, gin.H{"error": userMsg})
 }

@@ -190,3 +190,106 @@ func TestClaudeRequestToOpenAIPreservesImageURLParts(t *testing.T) {
 		t.Fatalf("expected first part image_url to be preserved, got %#v", parts[0])
 	}
 }
+
+// TestOpenAIToResponsesRequestImageURLPart verifies that image_url content parts
+// from an OpenAI chat/completions message are converted to input_image parts
+// expected by the Responses API, so multimodal requests don't trigger upstream 422/504.
+func TestOpenAIToResponsesRequestImageURLPart(t *testing.T) {
+	req := map[string]interface{}{
+		"model": "gpt-5.5",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "text", "text": "describe this image"},
+					map[string]interface{}{
+						"type":      "image_url",
+						"image_url": map[string]interface{}{"url": "https://example.com/photo.png"},
+					},
+				},
+			},
+		},
+	}
+
+	out, err := openAIToResponsesRequest(req)
+	if err != nil {
+		t.Fatalf("openAIToResponsesRequest returned error: %v", err)
+	}
+
+	input, ok := out["input"].([]interface{})
+	if !ok || len(input) != 1 {
+		t.Fatalf("expected 1 input item, got %#v", out["input"])
+	}
+	item, _ := input[0].(map[string]interface{})
+	parts, ok := item["content"].([]interface{})
+	if !ok || len(parts) != 2 {
+		t.Fatalf("expected 2 content parts, got %#v", item["content"])
+	}
+
+	textPart, _ := parts[0].(map[string]interface{})
+	if textPart["type"] != "input_text" {
+		t.Fatalf("expected text part to be input_text, got %#v", textPart)
+	}
+	if textPart["text"] != "describe this image" {
+		t.Fatalf("expected text preserved, got %#v", textPart["text"])
+	}
+
+	imgPart, _ := parts[1].(map[string]interface{})
+	if imgPart["type"] != "input_image" {
+		t.Fatalf("expected image part to be input_image, got %#v", imgPart)
+	}
+	if imgPart["image_url"] != "https://example.com/photo.png" {
+		t.Fatalf("expected image_url flattened to string, got %#v", imgPart["image_url"])
+	}
+}
+
+// TestResponsesMessagesRoundTripToResponses verifies that when both client and
+// channel use the "responses" protocol, a body sent with the chat/completions
+// "messages" field is properly normalized through responsesToOpenAI →
+// openAIToResponsesRequest so the upstream receives a valid "input" field instead
+// of the raw "messages" field (which would cause 422/502).
+func TestResponsesMessagesRoundTripToResponses(t *testing.T) {
+	// Simulate the body a client sends to /v1/responses using messages format
+	req := map[string]interface{}{
+		"model":  "gpt-5.5",
+		"stream": false,
+		"messages": []interface{}{
+			map[string]interface{}{"role": "system", "content": "You are helpful."},
+			map[string]interface{}{"role": "user", "content": "Hello"},
+			map[string]interface{}{"role": "assistant", "content": "Hi there!"},
+			map[string]interface{}{"role": "user", "content": "Goodbye"},
+		},
+	}
+
+	// Step 1: responsesToOpenAI (NormalizeClientRequest for "responses" protocol)
+	intermediate, err := responsesToOpenAI(req)
+	if err != nil {
+		t.Fatalf("responsesToOpenAI returned error: %v", err)
+	}
+	// Should contain standard messages field
+	msgs, ok := intermediate["messages"].([]interface{})
+	if !ok || len(msgs) != 4 {
+		t.Fatalf("expected 4 messages after normalize, got %#v", intermediate["messages"])
+	}
+
+	// Step 2: openAIToResponsesRequest (ConvertRequest to "responses" channel format)
+	intermediate["model"] = "gpt-5.5"
+	final, err := openAIToResponsesRequest(intermediate)
+	if err != nil {
+		t.Fatalf("openAIToResponsesRequest returned error: %v", err)
+	}
+
+	// Final output must have "input" (not "messages") so the upstream Responses API accepts it
+	if _, hasMessages := final["messages"]; hasMessages {
+		t.Fatal("expected no 'messages' field in final Responses API request body")
+	}
+	input, ok := final["input"].([]interface{})
+	if !ok || len(input) != 3 { // system becomes instructions; user + assistant + user = 3 input items
+		t.Fatalf("expected 3 input items (system->instructions), got %#v", final["input"])
+	}
+	instructions, _ := final["instructions"].(string)
+	if instructions != "You are helpful." {
+		t.Fatalf("expected system message extracted as instructions, got %q", instructions)
+	}
+}
+

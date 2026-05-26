@@ -1250,16 +1250,34 @@ func openAIToResponsesRequest(req map[string]interface{}) (map[string]interface{
 						continue
 					}
 					pType, _ := pm["type"].(string)
-					if pType == "text" {
+					switch pType {
+					case "text":
 						if text, _ := pm["text"].(string); text != "" {
 							parts = append(parts, map[string]interface{}{
 								"type": "input_text",
 								"text": text,
 							})
 						}
-						continue
+					case "image_url":
+						// OpenAI image_url part → Responses API input_image part.
+						// OpenAI format: {"type":"image_url","image_url":{"url":"..."}}
+						// Responses API: {"type":"input_image","image_url":"..."}
+						var imageURL string
+						switch iv := pm["image_url"].(type) {
+						case map[string]interface{}:
+							imageURL, _ = iv["url"].(string)
+						case string:
+							imageURL = iv
+						}
+						if imageURL != "" {
+							parts = append(parts, map[string]interface{}{
+								"type":      "input_image",
+								"image_url": imageURL,
+							})
+						}
+					default:
+						parts = append(parts, pm)
 					}
-					parts = append(parts, pm)
 				}
 				item["content"] = parts
 			default:
