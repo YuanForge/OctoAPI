@@ -1097,8 +1097,15 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 	var rawSSEBytes int
 
 	scanner := bufio.NewScanner(resp.Body)
+	// Gemini thinking 模型的单个 SSE data: 行可能远超 64 KB（Go Scanner 默认 token 上限），
+	// 超出会使 scanner.Scan() 停止并静默截断流。此处将上限提升至 10 MB。
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	var streamReadErr error
 	c.Stream(func(w io.Writer) bool {
 		if !scanner.Scan() {
+			streamReadErr = scanner.Err()
 			if sseConv != nil {
 				for _, l := range sseConv.Flush() {
 					fmt.Fprintf(w, "%s\n", l)
@@ -1128,6 +1135,13 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			UpstreamResponse: model.JSON{"lines": rawSSELines},
 			ClientResponse:   buildStreamClientResponse(rawSSELines, proto),
 		})
+
+	if streamReadErr != nil {
+		service.RecordChannelError(c.Request.Context(), channelID)
+		log.Printf("[llm] stream read error corr_id=%s channel_id=%d err=%v", corrID, channelID, streamReadErr)
+		_, _ = db.Engine.Where("corr_id = ?", corrID).Cols("status", "error_msg").
+			Update(&model.LLMLog{Status: "error", ErrorMsg: streamReadErr.Error()})
+	}
 
 	llmSettle(c, ch, origReqData, usage.normalized(origReqData), totalHold, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, userGroup)
 }
@@ -1339,6 +1353,14 @@ func buildStreamClientResponse(lines []string, proto string) model.JSON {
 								if parts, ok := content["parts"].([]interface{}); ok {
 									for _, p := range parts {
 										if pm, ok := p.(map[string]interface{}); ok {
+											// 跳过 Gemini 思考链 part（thought=true 或含 thoughtSignature），
+											// 与实际返回给客户端的 SSE 转换逻辑保持一致。
+											if thought, _ := pm["thought"].(bool); thought {
+												continue
+											}
+											if _, hasSig := pm["thoughtSignature"]; hasSig {
+												continue
+											}
 											if t, _ := pm["text"].(string); t != "" {
 												buf.WriteString(t)
 											}
