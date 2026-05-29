@@ -81,11 +81,13 @@ func NormalizeUsage(resp map[string]interface{}, sourceProtocol string) map[stri
 		if meta, ok := resp["usageMetadata"].(map[string]interface{}); ok {
 			in, _ := meta["promptTokenCount"].(float64)
 			out, _ := meta["candidatesTokenCount"].(float64)
+			thoughts, _ := meta["thoughtsTokenCount"].(float64)
 			cacheRead, _ := meta["cachedContentTokenCount"].(float64)
+			totalOut := out + thoughts
 			result := map[string]interface{}{
 				"prompt_tokens":     int64(in),
-				"completion_tokens": int64(out),
-				"total_tokens":      int64(in + out),
+				"completion_tokens": int64(totalOut),
+				"total_tokens":      int64(in + totalOut),
 			}
 			if cacheRead > 0 {
 				result["cache_read_tokens"] = int64(cacheRead)
@@ -528,6 +530,17 @@ func contentToParts(content interface{}) []map[string]interface{} {
 // Gemini → OpenAI (sync response body)
 // ─────────────────────────────────────────────
 
+// isGeminiThoughtPart 判断 Gemini part 是否为思考链内容（thought=true 或含 thoughtSignature 字段）。
+func isGeminiThoughtPart(pm map[string]interface{}) bool {
+	if thought, ok := pm["thought"].(bool); ok && thought {
+		return true
+	}
+	if _, ok := pm["thoughtSignature"]; ok {
+		return true
+	}
+	return false
+}
+
 func geminiToOpenAI(body []byte) ([]byte, error) {
 	var resp map[string]interface{}
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -556,6 +569,10 @@ func geminiToOpenAI(body []byte) ([]byte, error) {
 				for _, p := range parts {
 					pm, ok := p.(map[string]interface{})
 					if !ok {
+						continue
+					}
+					// 跳过思考链 part（thought=true 或含 thoughtSignature 字段）
+					if isGeminiThoughtPart(pm) {
 						continue
 					}
 					if text, ok := pm["text"].(string); ok {

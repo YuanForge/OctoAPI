@@ -65,7 +65,9 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 			delta, userID,
 		)
 		if err != nil {
-			_ = sess.Rollback()
+			if rbErr := sess.Rollback(); rbErr != nil {
+				log.Printf("[billing] rollback failed: %v", rbErr)
+			}
 			return err
 		}
 		if len(rows) > 0 {
@@ -76,7 +78,9 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 	}
 
 	if _, err := sess.Insert(tx); err != nil {
-		_ = sess.Rollback()
+		if rbErr := sess.Rollback(); rbErr != nil {
+			log.Printf("[billing] rollback failed: %v", rbErr)
+		}
 		return err
 	}
 

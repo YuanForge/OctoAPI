@@ -98,6 +98,7 @@ type usageState struct {
 	protocol            string
 	promptTokens        int64
 	completTokens       int64
+	thinkingTokens      int64  // Gemini 思考模型：thoughtsTokenCount（按输出 token 计费）
 	cacheCreationTokens int64  // Claude 写入缓存 token（1.25x）
 	cacheReadTokens     int64  // Claude/OpenAI/Gemini 命中缓存 token（折才价）
 	outputChars         int64  // 实时累计输出字符数（兜底估算）
@@ -163,18 +164,29 @@ func (u *usageState) processLine(line string) {
 				if n, _ := meta["candidatesTokenCount"].(float64); n > 0 {
 					u.completTokens = int64(n)
 				}
+				// Gemini 思考模型：思考 token 按输出 token 计费
+				if n, _ := meta["thoughtsTokenCount"].(float64); n > 0 {
+					u.thinkingTokens = int64(n)
+				}
 				// Gemini Context Caching: cachedContentTokenCount
 				if n, _ := meta["cachedContentTokenCount"].(float64); n > 0 {
 					u.cacheReadTokens = int64(n)
 				}
 			}
-			// 实时累计输出字符（兜底）
+			// 实时累计输出字符（兜底），跳过思考链 part
 			if candidates, ok := chunk["candidates"].([]interface{}); ok && len(candidates) > 0 {
 				if cand, ok := candidates[0].(map[string]interface{}); ok {
 					if content, ok := cand["content"].(map[string]interface{}); ok {
 						if parts, ok := content["parts"].([]interface{}); ok {
 							for _, p := range parts {
 								if pm, ok := p.(map[string]interface{}); ok {
+									// 跳过思考链 part，避免虚增输出字符估算
+									if thought, _ := pm["thought"].(bool); thought {
+										continue
+									}
+									if _, hasThoughtSig := pm["thoughtSignature"]; hasThoughtSig {
+										continue
+									}
 									if text, _ := pm["text"].(string); text != "" {
 										u.outputChars += int64(len(text))
 									}
@@ -256,11 +268,12 @@ func (u *usageState) processLine(line string) {
 // outputChars 估算 completion_tokens，并从请求消息内容估算 prompt_tokens，
 // 确保用户中断时仍按实际消耗计费，不会全额退款。
 func (u *usageState) normalized(req map[string]interface{}) map[string]interface{} {
-	if u.promptTokens > 0 || u.completTokens > 0 {
+	if u.promptTokens > 0 || u.completTokens > 0 || u.thinkingTokens > 0 {
 		// 精确值：来自响应尾部 usage 字段
+		// Gemini 思考模型：思考 token 按输出 token 计费，合并到 completion_tokens
 		result := map[string]interface{}{
 			"prompt_tokens":     u.promptTokens,
-			"completion_tokens": u.completTokens,
+			"completion_tokens": u.completTokens + u.thinkingTokens,
 		}
 		if u.cacheCreationTokens > 0 {
 			result["cache_creation_tokens"] = u.cacheCreationTokens

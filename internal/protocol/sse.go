@@ -278,6 +278,7 @@ func (c *claudeToOpenAISSE) emitFinishChunk(reason string, outputTokens int64) [
 // Gemini SSE → OpenAI SSE
 // ─────────────────────────────────────────────
 
+
 type geminiToOpenAISSE struct {
 	doneSent bool
 }
@@ -303,6 +304,10 @@ func (g *geminiToOpenAISSE) Convert(line string) []string {
 				if parts, ok := contentObj["parts"].([]interface{}); ok {
 					for _, p := range parts {
 						if pm, ok := p.(map[string]interface{}); ok {
+							// 跳过思考链 part（thought=true 或含 thoughtSignature 字段）
+							if isGeminiThoughtPart(pm) {
+								continue
+							}
 							if t, ok := pm["text"].(string); ok {
 								text += t
 							}
@@ -335,10 +340,11 @@ func (g *geminiToOpenAISSE) Convert(line string) []string {
 	if meta, ok := chunk["usageMetadata"].(map[string]interface{}); ok {
 		in, _ := meta["promptTokenCount"].(float64)
 		out, _ := meta["candidatesTokenCount"].(float64)
+		thoughts, _ := meta["thoughtsTokenCount"].(float64)
 		deltaChunk["usage"] = map[string]interface{}{
 			"prompt_tokens":     int64(in),
-			"completion_tokens": int64(out),
-			"total_tokens":      int64(in + out),
+			"completion_tokens": int64(out + thoughts),
+			"total_tokens":      int64(in + out + thoughts),
 		}
 	}
 

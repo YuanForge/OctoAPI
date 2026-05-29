@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,7 +40,7 @@ func (h *WechatHandler) Init(c *gin.Context) {
 	state := uuid.New().String()
 
 	// 存储 state -> pending，10 分钟有效
-	cache.Client.Set(context.Background(), wechatStatePrefix+state, "pending", wechatStateTTL)
+	cache.Client.Set(c.Request.Context(), wechatStatePrefix+state, "pending", wechatStateTTL)
 
 	// 构造微信 OAuth URL（用户在微信内打开时触发授权）
 	redirectURI := url.QueryEscape(redirectBase + "/api/auth/wechat/callback")
@@ -63,7 +62,7 @@ func (h *WechatHandler) Callback(c *gin.Context) {
 	}
 
 	// 验证 state 存在
-	val, err := cache.Client.Get(context.Background(), wechatStatePrefix+state).Result()
+	val, err := cache.Client.Get(c.Request.Context(), wechatStatePrefix+state).Result()
 	if err != nil || val == "" || val == "done" {
 		c.String(http.StatusBadRequest, "state invalid or expired")
 		return
@@ -122,7 +121,7 @@ func (h *WechatHandler) Callback(c *gin.Context) {
 
 	// 把 token 写入 Redis，以 state 为 key
 	result, _ := json.Marshal(map[string]string{"token": token})
-	cache.Client.Set(context.Background(), wechatStatePrefix+state, string(result), 5*time.Minute)
+	cache.Client.Set(c.Request.Context(), wechatStatePrefix+state, string(result), 5*time.Minute)
 
 	// 回调前端页面（可配置）
 	frontendURL := getSettingValue("wechat_frontend_url")
@@ -139,7 +138,7 @@ func (h *WechatHandler) Poll(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 state 参数"})
 		return
 	}
-	val, err := cache.Client.Get(context.Background(), wechatStatePrefix+state).Result()
+	val, err := cache.Client.Get(c.Request.Context(), wechatStatePrefix+state).Result()
 	if err != nil || val == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "expired"})
 		return
@@ -155,6 +154,6 @@ func (h *WechatHandler) Poll(c *gin.Context) {
 		return
 	}
 	// 消费掉 state，防止重复使用
-	cache.Client.Del(context.Background(), wechatStatePrefix+state)
+	cache.Client.Del(c.Request.Context(), wechatStatePrefix+state)
 	c.JSON(http.StatusOK, gin.H{"status": "success", "token": data["token"]})
 }
