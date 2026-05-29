@@ -14,65 +14,63 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// applyAPIKeyAuth 将已验证的 API Key 写入 gin 上下文，并检查账户冻结状态。
+// 返回 false 表示已向客户端写入错误响应，调用方应立即 return。
+func applyAPIKeyAuth(c *gin.Context, apiKey *model.APIKey) bool {
+user := &model.User{}
+if found, _ := db.Engine.ID(apiKey.UserID).Cols("group", "is_active").Get(user); found {
+if !user.IsActive {
+c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "账户已被冻结，请联系管理员"})
+return false
+}
+c.Set("user_group", user.Group)
+}
+c.Set("user_id", apiKey.UserID)
+c.Set("api_key_id", apiKey.ID)
+c.Set("key_type", apiKey.KeyType)
+c.Set("auth_type", "apikey")
+return true
+}
+
 // Auth supports both X-API-Key header and Authorization: Bearer JWT.
 func Auth(cfg *config.ServerConfig) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Try API Key first
-		rawKey := strings.TrimSpace(c.GetHeader("X-API-Key"))
-		if rawKey == "" {
-			rawKey = strings.TrimSpace(c.GetHeader("X-Goog-Api-Key"))
-		}
-		// Gemini official clients usually send key in query for native route:
-		// /v1beta/models/{model}:generateContent?key=...
-		if rawKey == "" && strings.HasPrefix(c.Request.URL.Path, "/v1beta/models/") {
-			rawKey = strings.TrimSpace(c.Query("key"))
-		}
-		if rawKey != "" {
-			apiKey, err := service.LookupAPIKey(c.Request.Context(), rawKey)
-			if err != nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "API Key 无效"})
-				return
-			}
-			// 检查用户账户是否被冻结
-			user := &model.User{}
-			if found, _ := db.Engine.ID(apiKey.UserID).Cols("group", "is_active").Get(user); found {
-				if !user.IsActive {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "账户已被冻结，请联系管理员"})
-					return
-				}
-				c.Set("user_group", user.Group)
-			}
-			c.Set("user_id", apiKey.UserID)
-			c.Set("api_key_id", apiKey.ID)
-			c.Set("key_type", apiKey.KeyType)
-			c.Set("auth_type", "apikey")
-			c.Next()
-			return
-		}
+return func(c *gin.Context) {
+// Try API Key first
+rawKey := strings.TrimSpace(c.GetHeader("X-API-Key"))
+if rawKey == "" {
+rawKey = strings.TrimSpace(c.GetHeader("X-Goog-Api-Key"))
+}
+// Gemini official clients usually send key in query for native route:
+// /v1beta/models/{model}:generateContent?key=...
+if rawKey == "" && strings.HasPrefix(c.Request.URL.Path, "/v1beta/models/") {
+rawKey = strings.TrimSpace(c.Query("key"))
+}
+if rawKey != "" {
+apiKey, err := service.LookupAPIKey(c.Request.Context(), rawKey)
+if err != nil {
+c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "API Key 无效"})
+return
+}
+if !applyAPIKeyAuth(c, apiKey) {
+return
+}
+c.Next()
+return
+}
 
-		// Try JWT Bearer
-		authHeader := c.GetHeader("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+// Try JWT Bearer
+authHeader := c.GetHeader("Authorization")
+if strings.HasPrefix(authHeader, "Bearer ") {
+tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 
-			// First try to validate as API Key (supports "Authorization: Bearer sk-xxx")
-			if apiKey, err := service.LookupAPIKey(c.Request.Context(), tokenStr); err == nil {
-				// 检查用户账户是否被冻结
-				user := &model.User{}
-				if found, _ := db.Engine.ID(apiKey.UserID).Cols("group", "is_active").Get(user); found {
-					if !user.IsActive {
-						c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "账户已被冻结，请联系管理员"})
-						return
-					}
-					c.Set("user_group", user.Group)
-				}
-				c.Set("user_id", apiKey.UserID)
-				c.Set("api_key_id", apiKey.ID)
-				c.Set("key_type", apiKey.KeyType)
-				c.Set("auth_type", "apikey")
-				c.Next()
-				return
-			}
+// First try to validate as API Key (supports "Authorization: Bearer sk-xxx")
+if apiKey, err := service.LookupAPIKey(c.Request.Context(), tokenStr); err == nil {
+if !applyAPIKeyAuth(c, apiKey) {
+return
+}
+c.Next()
+return
+}
 
 			// Fall back to JWT
 			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {

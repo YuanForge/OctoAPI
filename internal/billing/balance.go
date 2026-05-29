@@ -43,20 +43,26 @@ return redis.call("DECRBY", KEYS[1], ARGV[1])
 `)
 
 // Charge 原子扣减 credits。余额不足时返回错误。
+// Lua 脚本在键不存在时返回 -2；此时从 DB 同步余额后重试一次，
+// 避免在热路径上额外发起一次 GET。
 func Charge(ctx context.Context, userID, credits int64) error {
 	if credits <= 0 {
 		return nil
 	}
 	key := fmt.Sprintf(balanceKeyFmt, userID)
-	// 确保 Redis 中存在该键
-	if _, err := cache.Client.Get(ctx, key).Int64(); err != nil {
-		if _, syncErr := SyncBalanceToRedis(ctx, userID); syncErr != nil {
-			return syncErr
-		}
-	}
 	result, err := luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
 	if err != nil {
 		return err
+	}
+	if result == -2 {
+		// Redis 键不存在：从 DB 同步后重试
+		if _, syncErr := SyncBalanceToRedis(ctx, userID); syncErr != nil {
+			return syncErr
+		}
+		result, err = luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
+		if err != nil {
+			return err
+		}
 	}
 	if result == -1 {
 		return fmt.Errorf("余额不足")
