@@ -17,19 +17,19 @@ import (
 // applyAPIKeyAuth 将已验证的 API Key 写入 gin 上下文，并检查账户冻结状态。
 // 返回 false 表示已向客户端写入错误响应，调用方应立即 return。
 func applyAPIKeyAuth(c *gin.Context, apiKey *model.APIKey) bool {
-user := &model.User{}
-if found, _ := db.Engine.ID(apiKey.UserID).Cols("group", "is_active").Get(user); found {
-if !user.IsActive {
-c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "账户已被冻结，请联系管理员"})
-return false
-}
-c.Set("user_group", user.Group)
-}
-c.Set("user_id", apiKey.UserID)
-c.Set("api_key_id", apiKey.ID)
-c.Set("key_type", apiKey.KeyType)
-c.Set("auth_type", "apikey")
-return true
+	user := &model.User{}
+	if found, _ := db.Engine.ID(apiKey.UserID).Cols("group", "is_active").Get(user); found {
+		if !user.IsActive {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "账户已被冻结，请联系管理员"})
+			return false
+		}
+		c.Set("user_group", user.Group)
+	}
+	c.Set("user_id", apiKey.UserID)
+	c.Set("api_key_id", apiKey.ID)
+	c.Set("key_type", apiKey.KeyType)
+	c.Set("auth_type", "apikey")
+	return true
 }
 
 // Auth supports both X-API-Key header and Authorization: Bearer JWT.
