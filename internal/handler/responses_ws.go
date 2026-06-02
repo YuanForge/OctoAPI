@@ -45,6 +45,8 @@ var wsUpgrader = websocket.Upgrader{
 // @Tags         LLM
 // @Security     ApiKeyAuth
 // @Param        model  query  string  false  "默认模型名称（routing_model），可在 response.create 消息中覆盖"
+// @Success      101    {string} string "Switching Protocols"
+// @Failure      400    {object} model.APIErrorResponse "WebSocket 升级失败或消息格式错误"
 // @Router       /v1/responses [get]
 func ResponsesWSProxy(c *gin.Context) {
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)

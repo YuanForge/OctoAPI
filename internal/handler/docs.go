@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 
@@ -33,10 +34,10 @@ var allowedUserDocTags = map[string]bool{
 func readSwaggerDoc(c *gin.Context) ([]byte, error) {
 	host := c.Request.Host
 	if fwd := c.GetHeader("X-Forwarded-Host"); fwd != "" {
-		host = fwd
+		host = firstForwardedValue(fwd)
 	}
 	schemes := []string{"http"}
-	if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+	if isHTTPSRequest(c, host) {
 		schemes = []string{"https"}
 	}
 
@@ -49,6 +50,48 @@ func readSwaggerDoc(c *gin.Context) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(doc), nil
+}
+
+func firstForwardedValue(value string) string {
+	parts := strings.Split(value, ",")
+	if len(parts) == 0 {
+		return strings.TrimSpace(value)
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func isHTTPSRequest(c *gin.Context, host string) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+
+	for _, header := range []string{"X-Forwarded-Proto", "X-Forwarded-Scheme", "X-Url-Scheme"} {
+		if strings.EqualFold(firstForwardedValue(c.GetHeader(header)), "https") {
+			return true
+		}
+	}
+	if strings.EqualFold(c.GetHeader("X-Forwarded-SSL"), "on") {
+		return true
+	}
+	if strings.Contains(strings.ToLower(c.GetHeader("CF-Visitor")), `"scheme":"https"`) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(c.GetHeader("Forwarded")), "proto=https") {
+		return true
+	}
+
+	hostname := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostname = h
+	}
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	if hostname == "" || hostname == "localhost" || strings.HasPrefix(hostname, "127.") || hostname == "::1" {
+		return false
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+	}
+	return strings.Contains(hostname, ".")
 }
 
 func shouldKeepUserDocOperation(path, method string, op map[string]any) bool {

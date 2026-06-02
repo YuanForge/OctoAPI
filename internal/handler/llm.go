@@ -34,6 +34,15 @@ const (
 
 // OpenAIModels returns an OpenAI-compatible model list for clients that discover
 // available models through GET /v1/models.
+//
+// @Summary      OpenAI 兼容模型列表
+// @Description  返回当前 API Key 可用的 LLM 模型列表；data[].id 可填入对话请求的 model 字段作为 routing_model。
+// @Tags         LLM
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Success      200  {object}  model.OpenAIModelListResponse
+// @Failure      500  {object}  model.APIErrorResponse  "内部错误"
+// @Router       /v1/models [get]
 func OpenAIModels(c *gin.Context) {
 	var channels []model.Channel
 	if err := db.Engine.Where("is_active = true AND type = ?", "llm").
@@ -96,11 +105,11 @@ func effectiveProtocol(ch *model.Channel) string {
 // @Accept       json
 // @Produce      json
 // @Security     ApiKeyAuth
-// @Param        body  body      object  true  "请求体，参考 OpenAI Chat Completions API；model 填渠道名称（routing_model）"
-// @Success      200   {object}  object  "OpenAI 格式响应；stream=true 时为 SSE 流"
-// @Failure      400   {object}  object  "参数错误"
-// @Failure      402   {object}  object  "余额不足"
-// @Failure      503   {object}  object  "无可用渠道"
+// @Param        body  body      model.OpenAIChatCompletionRequest  true  "OpenAI Chat Completions 请求体；model 填渠道名称（routing_model）"
+// @Success      200   {object}  model.OpenAIChatCompletionResponse  "OpenAI 格式响应；stream=true 时为 text/event-stream SSE 流"
+// @Failure      400   {object}  model.APIErrorResponse  "参数错误"
+// @Failure      402   {object}  model.APIErrorResponse  "余额不足"
+// @Failure      503   {object}  model.APIErrorResponse  "无可用渠道"
 // @Router       /v1/chat/completions [post]
 func LLMProxy(c *gin.Context) {
 	c.Set("client_proto", protocolOpenAI)
@@ -116,10 +125,10 @@ func LLMProxy(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Security     ApiKeyAuth
-// @Param        body  body      object  true  "Claude Messages 请求体；model 填渠道名称"
-// @Success      200   {object}  object  "Claude 格式响应；stream=true 时为 SSE 流"
-// @Failure      400   {object}  object  "参数错误"
-// @Failure      402   {object}  object  "余额不足"
+// @Param        body  body      model.ClaudeMessagesRequest  true  "Claude Messages 请求体；model 填渠道名称（routing_model）"
+// @Success      200   {object}  model.ClaudeMessagesResponse  "Claude 格式响应；stream=true 时为 text/event-stream SSE 流"
+// @Failure      400   {object}  model.APIErrorResponse  "参数错误"
+// @Failure      402   {object}  model.APIErrorResponse  "余额不足"
 // @Router       /v1/messages [post]
 func ClaudeProxy(c *gin.Context) {
 	c.Set("client_proto", protocolClaude)
@@ -137,10 +146,10 @@ func ClaudeProxy(c *gin.Context) {
 // @Produce      json
 // @Security     ApiKeyAuth
 // @Param        channel_id  query     int     false  "渠道 ID（兼容旧版）"
-// @Param        body        body      object  true   "Gemini generateContent 风格请求体"
-// @Success      200   {object}  object  "Gemini 风格响应"
-// @Failure      400   {object}  object  "参数错误"
-// @Failure      402   {object}  object  "余额不足"
+// @Param        body        body      model.GeminiGenerateContentRequest  true   "Gemini generateContent 风格请求体；model 可省略并由 channel_id 指定"
+// @Success      200   {object}  model.GeminiGenerateContentResponse  "Gemini 风格响应"
+// @Failure      400   {object}  model.APIErrorResponse  "参数错误"
+// @Failure      402   {object}  model.APIErrorResponse  "余额不足"
 // @Router       /v1/gemini [post]
 func GeminiProxy(c *gin.Context) {
 	c.Set("client_proto", protocolGemini)
@@ -160,10 +169,12 @@ func GeminiProxy(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Security     ApiKeyAuth
-// @Param        path  path  string  true  "{model}:generateContent 或 {model}:streamGenerateContent"
-// @Success      200   {object}  object  "Gemini 格式响应；流式时为 SSE"
-// @Failure      400   {object}  object  "参数错误"
-// @Failure      402   {object}  object  "余额不足"
+// @Param        path  path   string  true   "{model}:generateContent 或 {model}:streamGenerateContent"
+// @Param        alt   query  string  false  "流式 SSE 参数；streamGenerateContent 通常传 sse"
+// @Param        body  body   model.GeminiGenerateContentRequest  true  "Gemini generateContent 请求体；model 和 stream 会从 URL 自动注入"
+// @Success      200   {object}  model.GeminiGenerateContentResponse  "Gemini 格式响应；流式时为 text/event-stream SSE"
+// @Failure      400   {object}  model.APIErrorResponse  "参数错误"
+// @Failure      402   {object}  model.APIErrorResponse  "余额不足"
 // @Router       /v1beta/models/{path} [post]
 func GeminiNativeProxy(c *gin.Context) {
 	// Gin wildcard 路由 /v1beta/models/*path 捕获的值形如 /gemini-2.5-flash:generateContent
@@ -231,11 +242,11 @@ func GeminiNativeProxy(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Security     ApiKeyAuth
-// @Param        body  body      object  true  "Responses API 请求体；model 填渠道名称（routing_model）"
-// @Success      200   {object}  object  "Responses API 格式响应；stream=true 时为 SSE 流"
-// @Failure      400   {object}  object  "参数错误"
-// @Failure      402   {object}  object  "余额不足"
-// @Failure      503   {object}  object  "无可用渠道"
+// @Param        body  body      model.ResponsesRequest  true  "Responses API 请求体；model 填渠道名称（routing_model）"
+// @Success      200   {object}  model.ResponsesResponse  "Responses API 格式响应；stream=true 时为 text/event-stream SSE 流"
+// @Failure      400   {object}  model.APIErrorResponse  "参数错误"
+// @Failure      402   {object}  model.APIErrorResponse  "余额不足"
+// @Failure      503   {object}  model.APIErrorResponse  "无可用渠道"
 // @Router       /v1/responses [post]
 func ResponsesProxy(c *gin.Context) {
 	c.Set("client_proto", protocolResponses)
@@ -244,6 +255,19 @@ func ResponsesProxy(c *gin.Context) {
 
 // ResponsesCompactProxy 处理 POST /v1/responses/compact。
 // Codex 在执行对话压缩时会请求该兼容端点；请求体仍按 Responses API 代理链路处理。
+//
+// @Summary      OpenAI Responses API 对话压缩兼容
+// @Description  兼容 Codex 等客户端的 POST /v1/responses/compact；仅选择 protocol=responses 的上游渠道，并按 Responses API 格式返回。
+// @Tags         LLM
+// @Accept       json
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Param        body  body      model.ResponsesRequest  true  "Responses API 请求体；model 填渠道名称（routing_model）"
+// @Success      200   {object}  model.ResponsesResponse  "Responses API 格式响应；stream=true 时为 text/event-stream SSE 流"
+// @Failure      400   {object}  model.APIErrorResponse  "参数错误"
+// @Failure      402   {object}  model.APIErrorResponse  "余额不足"
+// @Failure      503   {object}  model.APIErrorResponse  "无可用渠道"
+// @Router       /v1/responses/compact [post]
 func ResponsesCompactProxy(c *gin.Context) {
 	c.Set("client_proto", protocolResponses)
 	c.Set("responses_operation", responsesOperationCompact)

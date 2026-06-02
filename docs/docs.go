@@ -358,38 +358,38 @@ const docTemplate = `{
                 "summary": "OpenAI 兼容对话（Chat Completions）",
                 "parameters": [
                     {
-                        "description": "请求体，参考 OpenAI Chat Completions API；model 填渠道名称（routing_model）",
+                        "description": "OpenAI Chat Completions 请求体；model 填渠道名称（routing_model）",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.OpenAIChatCompletionRequest"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OpenAI 格式响应；stream=true 时为 SSE 流",
+                        "description": "OpenAI 格式响应；stream=true 时为 text/event-stream SSE 流",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.OpenAIChatCompletionResponse"
                         }
                     },
                     "400": {
                         "description": "参数错误",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     },
                     "402": {
                         "description": "余额不足",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     },
                     "503": {
                         "description": "无可用渠道",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     }
                 }
@@ -402,7 +402,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "发送 Gemini generateContent 格式请求；model 填渠道的 routing_model（可省略，由 channel_id 指定）。",
+                "description": "接收 Gemini generateContent 风格请求体并按统一路由转发；这不是 Google Gemini 的原生 URL 路径。若需兼容 Google AI SDK 原生路径，请使用 /v1beta/models/{path}。",
                 "consumes": [
                     "application/json"
                 ],
@@ -412,7 +412,7 @@ const docTemplate = `{
                 "tags": [
                     "LLM"
                 ],
-                "summary": "Google Gemini 原生对话",
+                "summary": "Gemini generateContent 兼容接口（非原生路径）",
                 "parameters": [
                     {
                         "type": "integer",
@@ -421,32 +421,32 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "Gemini generateContent 请求体",
+                        "description": "Gemini generateContent 风格请求体；model 可省略并由 channel_id 指定",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.GeminiGenerateContentRequest"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Gemini 格式响应",
+                        "description": "Gemini 风格响应",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.GeminiGenerateContentResponse"
                         }
                     },
                     "400": {
                         "description": "参数错误",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     },
                     "402": {
                         "description": "余额不足",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     }
                 }
@@ -528,32 +528,63 @@ const docTemplate = `{
                 "summary": "Anthropic Claude 原生对话",
                 "parameters": [
                     {
-                        "description": "Claude Messages 请求体；model 填渠道名称",
+                        "description": "Claude Messages 请求体；model 填渠道名称（routing_model）",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.ClaudeMessagesRequest"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Claude 格式响应；stream=true 时为 SSE 流",
+                        "description": "Claude 格式响应；stream=true 时为 text/event-stream SSE 流",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.ClaudeMessagesResponse"
                         }
                     },
                     "400": {
                         "description": "参数错误",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     },
                     "402": {
                         "description": "余额不足",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/models": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "返回当前 API Key 可用的 LLM 模型列表；data[].id 可填入对话请求的 model 字段作为 routing_model。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LLM"
+                ],
+                "summary": "OpenAI 兼容模型列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.OpenAIModelListResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     }
                 }
@@ -610,6 +641,154 @@ const docTemplate = `{
                         "description": "余额不足",
                         "schema": {
                             "type": "object"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/responses": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "通过 WebSocket 连接使用 OpenAI Responses API。建立连接后发送 response.create 事件即可发起对话，服务端实时推送 Responses API 格式事件。",
+                "tags": [
+                    "LLM"
+                ],
+                "summary": "OpenAI Responses API（WebSocket 双向流）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "默认模型名称（routing_model），可在 response.create 消息中覆盖",
+                        "name": "model",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "101": {
+                        "description": "Switching Protocols",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "WebSocket 升级失败或消息格式错误",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "兼容 OpenAI Responses API（POST /v1/responses），Codex CLI 默认使用此接口。将 Responses API 格式请求转换为 Chat Completions 格式转发上游，并将响应转换回 Responses API 格式。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LLM"
+                ],
+                "summary": "OpenAI Responses API（Codex CLI 兼容）",
+                "parameters": [
+                    {
+                        "description": "Responses API 请求体；model 填渠道名称（routing_model）",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.ResponsesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Responses API 格式响应；stream=true 时为 text/event-stream SSE 流",
+                        "schema": {
+                            "$ref": "#/definitions/model.ResponsesResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "余额不足",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "无可用渠道",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/responses/compact": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "兼容 Codex 等客户端的 POST /v1/responses/compact；仅选择 protocol=responses 的上游渠道，并按 Responses API 格式返回。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LLM"
+                ],
+                "summary": "OpenAI Responses API 对话压缩兼容",
+                "parameters": [
+                    {
+                        "description": "Responses API 请求体；model 填渠道名称（routing_model）",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.ResponsesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Responses API 格式响应；stream=true 时为 text/event-stream SSE 流",
+                        "schema": {
+                            "$ref": "#/definitions/model.ResponsesResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "余额不足",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "无可用渠道",
+                        "schema": {
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     }
                 }
@@ -876,25 +1055,40 @@ const docTemplate = `{
                         "name": "path",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "流式 SSE 参数；streamGenerateContent 通常传 sse",
+                        "name": "alt",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Gemini generateContent 请求体；model 和 stream 会从 URL 自动注入",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.GeminiGenerateContentRequest"
+                        }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Gemini 格式响应；流式时为 SSE",
+                        "description": "Gemini 格式响应；流式时为 text/event-stream SSE",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.GeminiGenerateContentResponse"
                         }
                     },
                     "400": {
                         "description": "参数错误",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     },
                     "402": {
                         "description": "余额不足",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/model.APIErrorResponse"
                         }
                     }
                 }
@@ -1107,6 +1301,15 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "model.APIErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "example": "请求体 JSON 格式错误"
+                }
+            }
+        },
         "model.AudioRequest": {
             "type": "object",
             "required": [
@@ -1135,7 +1338,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "balance_after": {
-                    "description": "操作后用户余额快照",
+                    "description": "操作后用户通用余额快照",
                     "type": "integer"
                 },
                 "channel_id": {
@@ -1153,7 +1356,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "credits": {
-                    "description": "向用户收取的售价 credits",
+                    "description": "向用户收取的售价 credits（含通用余额+模型积分）",
                     "type": "integer"
                 },
                 "id": {
@@ -1161,6 +1364,10 @@ const docTemplate = `{
                 },
                 "metrics": {
                     "$ref": "#/definitions/model.JSON"
+                },
+                "model_credit_charged": {
+                    "description": "本次消耗的专属模型积分，Credits-ModelCreditCharged 为通用余额部分",
+                    "type": "integer"
                 },
                 "pool_key_id": {
                     "description": "号池 Key ID（0 表示未使用号池）",
@@ -1172,6 +1379,423 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "model.ClaudeContentBlock": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "example": "天气晴朗"
+                },
+                "id": {
+                    "type": "string",
+                    "example": "toolu_abc123"
+                },
+                "input": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "source": {
+                    "$ref": "#/definitions/model.ClaudeImageSource"
+                },
+                "text": {
+                    "type": "string",
+                    "example": "你好，介绍一下 FanAPI"
+                },
+                "tool_use_id": {
+                    "type": "string",
+                    "example": "toolu_abc123"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "text"
+                }
+            }
+        },
+        "model.ClaudeImageSource": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "string",
+                    "example": "iVBORw0KGgo..."
+                },
+                "media_type": {
+                    "type": "string",
+                    "example": "image/png"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "base64"
+                },
+                "url": {
+                    "type": "string",
+                    "example": "https://example.com/image.png"
+                }
+            }
+        },
+        "model.ClaudeMessage": {
+            "type": "object",
+            "required": [
+                "content",
+                "role"
+            ],
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ClaudeContentBlock"
+                    }
+                },
+                "role": {
+                    "type": "string",
+                    "example": "user"
+                }
+            }
+        },
+        "model.ClaudeMessagesRequest": {
+            "type": "object",
+            "required": [
+                "max_tokens",
+                "messages",
+                "model"
+            ],
+            "properties": {
+                "max_tokens": {
+                    "type": "integer",
+                    "example": 1024
+                },
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ClaudeMessage"
+                    }
+                },
+                "model": {
+                    "type": "string",
+                    "example": "claude-3-5-sonnet"
+                },
+                "stream": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "system": {
+                    "type": "string",
+                    "example": "You are a helpful assistant."
+                },
+                "temperature": {
+                    "type": "number",
+                    "example": 0.7
+                },
+                "tool_choice": {
+                    "type": "object"
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ClaudeTool"
+                    }
+                },
+                "top_p": {
+                    "type": "number",
+                    "example": 1
+                }
+            }
+        },
+        "model.ClaudeMessagesResponse": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ClaudeContentBlock"
+                    }
+                },
+                "id": {
+                    "type": "string",
+                    "example": "msg_abc123"
+                },
+                "model": {
+                    "type": "string",
+                    "example": "claude-3-5-sonnet"
+                },
+                "role": {
+                    "type": "string",
+                    "example": "assistant"
+                },
+                "stop_reason": {
+                    "type": "string",
+                    "example": "end_turn"
+                },
+                "stop_sequence": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "message"
+                },
+                "usage": {
+                    "$ref": "#/definitions/model.ClaudeUsage"
+                }
+            }
+        },
+        "model.ClaudeTool": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "example": "查询指定城市天气"
+                },
+                "input_schema": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                }
+            }
+        },
+        "model.ClaudeUsage": {
+            "type": "object",
+            "properties": {
+                "input_tokens": {
+                    "type": "integer",
+                    "example": 12
+                },
+                "output_tokens": {
+                    "type": "integer",
+                    "example": 24
+                }
+            }
+        },
+        "model.GeminiBlob": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "string",
+                    "example": "iVBORw0KGgo..."
+                },
+                "mimeType": {
+                    "type": "string",
+                    "example": "image/png"
+                }
+            }
+        },
+        "model.GeminiCandidate": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "$ref": "#/definitions/model.GeminiContent"
+                },
+                "finishReason": {
+                    "type": "string",
+                    "example": "STOP"
+                },
+                "index": {
+                    "type": "integer",
+                    "example": 0
+                }
+            }
+        },
+        "model.GeminiContent": {
+            "type": "object",
+            "required": [
+                "parts"
+            ],
+            "properties": {
+                "parts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeminiPart"
+                    }
+                },
+                "role": {
+                    "type": "string",
+                    "example": "user"
+                }
+            }
+        },
+        "model.GeminiFileData": {
+            "type": "object",
+            "properties": {
+                "fileUri": {
+                    "type": "string",
+                    "example": "https://example.com/image.jpg"
+                },
+                "mimeType": {
+                    "type": "string",
+                    "example": "image/jpeg"
+                }
+            }
+        },
+        "model.GeminiFunctionCall": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                }
+            }
+        },
+        "model.GeminiFunctionDeclaration": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "example": "查询指定城市天气"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "parameters": {
+                    "type": "object"
+                }
+            }
+        },
+        "model.GeminiFunctionResponse": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "response": {
+                    "type": "object"
+                }
+            }
+        },
+        "model.GeminiGenerateContentRequest": {
+            "type": "object",
+            "required": [
+                "contents"
+            ],
+            "properties": {
+                "contents": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeminiContent"
+                    }
+                },
+                "generationConfig": {
+                    "$ref": "#/definitions/model.GeminiGenerationConfig"
+                },
+                "model": {
+                    "type": "string",
+                    "example": "gemini-2.5-flash"
+                },
+                "stream": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "systemInstruction": {
+                    "$ref": "#/definitions/model.GeminiContent"
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeminiTool"
+                    }
+                }
+            }
+        },
+        "model.GeminiGenerateContentResponse": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeminiCandidate"
+                    }
+                },
+                "promptFeedback": {
+                    "type": "object"
+                },
+                "usageMetadata": {
+                    "$ref": "#/definitions/model.GeminiUsageMetadata"
+                }
+            }
+        },
+        "model.GeminiGenerationConfig": {
+            "type": "object",
+            "properties": {
+                "maxOutputTokens": {
+                    "type": "integer",
+                    "example": 1024
+                },
+                "responseModalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "TEXT",
+                        "IMAGE"
+                    ]
+                },
+                "temperature": {
+                    "type": "number",
+                    "example": 0.7
+                },
+                "topP": {
+                    "type": "number",
+                    "example": 1
+                }
+            }
+        },
+        "model.GeminiPart": {
+            "type": "object",
+            "properties": {
+                "fileData": {
+                    "$ref": "#/definitions/model.GeminiFileData"
+                },
+                "functionCall": {
+                    "$ref": "#/definitions/model.GeminiFunctionCall"
+                },
+                "functionResponse": {
+                    "$ref": "#/definitions/model.GeminiFunctionResponse"
+                },
+                "inlineData": {
+                    "$ref": "#/definitions/model.GeminiBlob"
+                },
+                "text": {
+                    "type": "string",
+                    "example": "你好，介绍一下 FanAPI"
+                }
+            }
+        },
+        "model.GeminiTool": {
+            "type": "object",
+            "properties": {
+                "functionDeclarations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeminiFunctionDeclaration"
+                    }
+                }
+            }
+        },
+        "model.GeminiUsageMetadata": {
+            "type": "object",
+            "properties": {
+                "candidatesTokenCount": {
+                    "type": "integer",
+                    "example": 24
+                },
+                "promptTokenCount": {
+                    "type": "integer",
+                    "example": 12
+                },
+                "totalTokenCount": {
+                    "type": "integer",
+                    "example": 36
                 }
             }
         },
@@ -1271,6 +1895,463 @@ const docTemplate = `{
                 "title": {
                     "description": "歌曲名称",
                     "type": "string"
+                }
+            }
+        },
+        "model.OpenAIChatChoice": {
+            "type": "object",
+            "properties": {
+                "finish_reason": {
+                    "type": "string",
+                    "example": "stop"
+                },
+                "index": {
+                    "type": "integer",
+                    "example": 0
+                },
+                "message": {
+                    "$ref": "#/definitions/model.OpenAIChatMessage"
+                }
+            }
+        },
+        "model.OpenAIChatCompletionRequest": {
+            "type": "object",
+            "required": [
+                "messages",
+                "model"
+            ],
+            "properties": {
+                "max_completion_tokens": {
+                    "type": "integer",
+                    "example": 1024
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "example": 1024
+                },
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.OpenAIChatMessage"
+                    }
+                },
+                "model": {
+                    "type": "string",
+                    "example": "gpt-4o-mini"
+                },
+                "response_modalities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "TEXT",
+                        "IMAGE"
+                    ]
+                },
+                "stream": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "temperature": {
+                    "type": "number",
+                    "example": 0.7
+                },
+                "tool_choice": {
+                    "type": "object"
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.OpenAIChatTool"
+                    }
+                },
+                "top_p": {
+                    "type": "number",
+                    "example": 1
+                }
+            }
+        },
+        "model.OpenAIChatCompletionResponse": {
+            "type": "object",
+            "properties": {
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.OpenAIChatChoice"
+                    }
+                },
+                "created": {
+                    "type": "integer",
+                    "example": 1710000000
+                },
+                "id": {
+                    "type": "string",
+                    "example": "chatcmpl_abc123"
+                },
+                "model": {
+                    "type": "string",
+                    "example": "gpt-4o-mini"
+                },
+                "object": {
+                    "type": "string",
+                    "example": "chat.completion"
+                },
+                "usage": {
+                    "$ref": "#/definitions/model.OpenAIUsage"
+                }
+            }
+        },
+        "model.OpenAIChatMessage": {
+            "type": "object",
+            "required": [
+                "role"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "example": "你好，介绍一下 FanAPI"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "weather"
+                },
+                "role": {
+                    "type": "string",
+                    "example": "user"
+                },
+                "tool_call_id": {
+                    "type": "string",
+                    "example": "call_weather"
+                },
+                "tool_calls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.OpenAIChatToolCall"
+                    }
+                }
+            }
+        },
+        "model.OpenAIChatTool": {
+            "type": "object",
+            "properties": {
+                "function": {
+                    "$ref": "#/definitions/model.OpenAIFunctionSpec"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "function"
+                }
+            }
+        },
+        "model.OpenAIChatToolCall": {
+            "type": "object",
+            "properties": {
+                "function": {
+                    "$ref": "#/definitions/model.OpenAIFunctionCall"
+                },
+                "id": {
+                    "type": "string",
+                    "example": "call_weather"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "function"
+                }
+            }
+        },
+        "model.OpenAIFunctionCall": {
+            "type": "object",
+            "properties": {
+                "arguments": {
+                    "type": "string",
+                    "example": "{\"city\":\"Shanghai\"}"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                }
+            }
+        },
+        "model.OpenAIFunctionSpec": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "example": "查询指定城市天气"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "parameters": {
+                    "type": "object"
+                },
+                "strict": {
+                    "type": "boolean",
+                    "example": false
+                }
+            }
+        },
+        "model.OpenAIModelInfo": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "integer",
+                    "example": 1710000000
+                },
+                "id": {
+                    "type": "string",
+                    "example": "gpt-4o-mini"
+                },
+                "object": {
+                    "type": "string",
+                    "example": "model"
+                },
+                "owned_by": {
+                    "type": "string",
+                    "example": "fanapi"
+                }
+            }
+        },
+        "model.OpenAIModelListResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.OpenAIModelInfo"
+                    }
+                },
+                "object": {
+                    "type": "string",
+                    "example": "list"
+                }
+            }
+        },
+        "model.OpenAIUsage": {
+            "type": "object",
+            "properties": {
+                "completion_tokens": {
+                    "type": "integer",
+                    "example": 24
+                },
+                "prompt_tokens": {
+                    "type": "integer",
+                    "example": 12
+                },
+                "total_tokens": {
+                    "type": "integer",
+                    "example": 36
+                }
+            }
+        },
+        "model.ResponsesContentPart": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "example": "https://example.com/image.png"
+                },
+                "text": {
+                    "type": "string",
+                    "example": "你好，介绍一下 FanAPI"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "input_text"
+                }
+            }
+        },
+        "model.ResponsesInputItem": {
+            "type": "object",
+            "properties": {
+                "arguments": {
+                    "type": "string",
+                    "example": "{\"city\":\"Shanghai\"}"
+                },
+                "call_id": {
+                    "type": "string",
+                    "example": "call_weather"
+                },
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResponsesContentPart"
+                    }
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "output": {
+                    "type": "object"
+                },
+                "role": {
+                    "type": "string",
+                    "example": "user"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "message"
+                }
+            }
+        },
+        "model.ResponsesOutputItem": {
+            "type": "object",
+            "properties": {
+                "arguments": {
+                    "type": "string",
+                    "example": "{\"city\":\"Shanghai\"}"
+                },
+                "call_id": {
+                    "type": "string",
+                    "example": "call_weather"
+                },
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResponsesContentPart"
+                    }
+                },
+                "id": {
+                    "type": "string",
+                    "example": "msg_abc123"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "role": {
+                    "type": "string",
+                    "example": "assistant"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "completed"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "message"
+                }
+            }
+        },
+        "model.ResponsesRequest": {
+            "type": "object",
+            "required": [
+                "input",
+                "model"
+            ],
+            "properties": {
+                "input": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResponsesInputItem"
+                    }
+                },
+                "instructions": {
+                    "type": "string",
+                    "example": "You are a helpful assistant."
+                },
+                "max_output_tokens": {
+                    "type": "integer",
+                    "example": 1024
+                },
+                "model": {
+                    "type": "string",
+                    "example": "gpt-4o-mini"
+                },
+                "stream": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "temperature": {
+                    "type": "number",
+                    "example": 0.7
+                },
+                "tool_choice": {
+                    "type": "object"
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResponsesTool"
+                    }
+                },
+                "top_p": {
+                    "type": "number",
+                    "example": 1
+                }
+            }
+        },
+        "model.ResponsesResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "integer",
+                    "example": 1710000000
+                },
+                "id": {
+                    "type": "string",
+                    "example": "resp_abc123"
+                },
+                "model": {
+                    "type": "string",
+                    "example": "gpt-4o-mini"
+                },
+                "object": {
+                    "type": "string",
+                    "example": "response"
+                },
+                "output": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ResponsesOutputItem"
+                    }
+                },
+                "status": {
+                    "type": "string",
+                    "example": "completed"
+                },
+                "usage": {
+                    "$ref": "#/definitions/model.ResponsesUsage"
+                }
+            }
+        },
+        "model.ResponsesTool": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "example": "查询指定城市天气"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "get_weather"
+                },
+                "parameters": {
+                    "type": "object"
+                },
+                "strict": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "type": {
+                    "type": "string",
+                    "example": "function"
+                }
+            }
+        },
+        "model.ResponsesUsage": {
+            "type": "object",
+            "properties": {
+                "input_tokens": {
+                    "type": "integer",
+                    "example": 12
+                },
+                "output_tokens": {
+                    "type": "integer",
+                    "example": 24
                 }
             }
         },
