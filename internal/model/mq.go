@@ -36,6 +36,10 @@ type TaskJob struct {
 	// 重试计数器——服务器在 429 轮转 Key 重试时递增
 	RetryCount int `json:"retry_count,omitempty"`
 
+	// 当前任务内已尝试过的号池 Key ID。用于 521/504 时同号池换 Key 重试，
+	// 全部 Key 都尝试过后再走渠道级重试策略。
+	PoolRetryKeyIDs []int64 `json:"pool_retry_key_ids,omitempty"`
+
 	// 稳定密钥失败重试：按售价升序排列的剩余待试渠道 ID 列表（不含当前渠道）。
 	// 结果处理器在 OutcomeFailed 时若此列表非空，则换下一个渠道重新发布任务。
 	RetryChannelIDs []int64 `json:"retry_channel_ids,omitempty"`
@@ -43,10 +47,11 @@ type TaskJob struct {
 
 // WorkerResult 结果常量。
 const (
-	OutcomeDone        = "done"
-	OutcomeFailed      = "failed"
-	OutcomeAsync       = "async"        // 上游返回了异步任务 ID，由轮询器完成后续处理
-	OutcomeRateLimited = "rate_limited" // HTTP 429；服务器应轮转号池 Key 并重试
+	OutcomeDone         = "done"
+	OutcomeFailed       = "failed"
+	OutcomeAsync        = "async"          // 上游返回了异步任务 ID，由轮询器完成后续处理
+	OutcomeRateLimited  = "rate_limited"   // HTTP 429；服务器应轮转号池 Key 并重试
+	OutcomePoolKeyRetry = "pool_key_retry" // HTTP 521/504；服务器应优先在同号池内换 Key 重试
 )
 
 // WorkerResult 是 Worker 执行完成后发布到 NATS 的结果消息。
@@ -79,5 +84,6 @@ type WorkerResult struct {
 	// 传回给服务器以便在 OutcomeRateLimited 时重新发布
 	RetryCount      int                    `json:"retry_count,omitempty"`
 	Payload         map[string]interface{} `json:"payload,omitempty"`
-	RetryChannelIDs []int64                `json:"retry_channel_ids,omitempty"` // 稳定密钥：剩余待试渠道 ID
+	PoolRetryKeyIDs []int64                `json:"pool_retry_key_ids,omitempty"` // 521/504 号池内重试：已试 Key ID
+	RetryChannelIDs []int64                `json:"retry_channel_ids,omitempty"`  // 稳定密钥：剩余待试渠道 ID
 }

@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
-import { CopyIcon, PlusIcon, SaveIcon } from 'lucide-react'
+import { type FormEvent, useMemo, useRef, useState } from 'react'
+import { CopyIcon, PlusIcon, RotateCcwIcon, SaveIcon, SearchIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/shared/PageHeader'
+import { TablePagination } from '@/components/shared/TablePagination'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -658,21 +659,40 @@ function formatBillingCost(channel: AdminChannel) {
   return formatBillingSummary(channel.billing_type, channel.billing_config ?? {}, 'cost')
 }
 
+const channelPageSize = 20
+
+const emptyChannelFilters = {
+  q: '',
+  name: '',
+  display_name: '',
+  price_min: '',
+  price_max: '',
+  price_order: '',
+}
+
 export function AdminChannelsPage() {
+  const [page, setPage] = useState(1)
+  const [filters, setFilters] = useState({ ...emptyChannelFilters })
+  const [queryParams, setQueryParams] = useState<Record<string, string>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+
   const { data, loading, error: loadError, reload } = useAsync(async () => {
     const [channelResponse, poolResponse] = await Promise.all([
-      adminApi.listChannels(),
+      adminApi.listChannels({ page, size: channelPageSize, ...queryParams }),
       adminApi.listKeyPools(),
     ])
     const rows = Array.isArray(channelResponse)
       ? channelResponse
       : channelResponse.channels ?? channelResponse.items ?? []
+    const total = Array.isArray(channelResponse) ? rows.length : channelResponse.total ?? rows.length
     const pools = Array.isArray(poolResponse) ? poolResponse : poolResponse.pools ?? []
-    return { rows, pools }
-  }, { rows: [] as AdminChannel[], pools: [] as AdminKeyPool[] })
+    setSelectedIds(new Set())
+    return { rows, pools, total }
+  }, { rows: [] as AdminChannel[], pools: [] as AdminKeyPool[], total: 0 }, [page, queryParams])
 
   const rows = data.rows
   const pools = data.pools
+  const total = data.total
 
   const [mutError, setMutError] = useState('')
   const [open, setOpen] = useState(false)
@@ -682,7 +702,6 @@ export function AdminChannelsPage() {
   const iconUploadRef = useRef<HTMLInputElement>(null)
 
   // 批量选择
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [batchRateOpen, setBatchRateOpen] = useState(false)
   const [batchRate, setBatchRate] = useState('')
   const [batchMutating, setBatchMutating] = useState(false)
@@ -886,6 +905,33 @@ export function AdminChannelsPage() {
     })
   }
 
+  function doSearch(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault()
+    const params: Record<string, string> = {}
+    const q = filters.q.trim()
+    const name = filters.name.trim()
+    const displayName = filters.display_name.trim()
+    const priceMin = filters.price_min.trim()
+    const priceMax = filters.price_max.trim()
+    if (q) params.q = q
+    if (name) params.name = name
+    if (displayName) params.display_name = displayName
+    if (priceMin) params.price_min = priceMin
+    if (priceMax) params.price_max = priceMax
+    if (filters.price_order) {
+      params.sort_by = 'price'
+      params.sort_order = filters.price_order
+    }
+    setPage(1)
+    setQueryParams(params)
+  }
+
+  function resetSearch() {
+    setFilters({ ...emptyChannelFilters })
+    setPage(1)
+    setQueryParams({})
+  }
+
   const allOnPageSelected = rows.length > 0 && rows.every((r) => r.id != null && selectedIds.has(r.id))
 
   function toggleSelectAll() {
@@ -923,6 +969,80 @@ export function AdminChannelsPage() {
       ) : null}
 
       {/* 批量操作工具栏 */}
+      <Card>
+        <CardContent className="py-4">
+          <form className="flex flex-wrap items-end gap-3" onSubmit={doSearch}>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">全部</label>
+              <Input
+                className="w-44"
+                placeholder="名称 / 模型"
+                value={filters.q}
+                onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">渠道名称</label>
+              <Input
+                className="w-44"
+                placeholder="渠道名称"
+                value={filters.name}
+                onChange={(event) => setFilters((current) => ({ ...current, name: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">自定义名称</label>
+              <Input
+                className="w-44"
+                placeholder="展示名称"
+                value={filters.display_name}
+                onChange={(event) => setFilters((current) => ({ ...current, display_name: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">价格范围(CNY)</label>
+              <div className="flex items-center gap-1">
+                <Input
+                  className="w-24"
+                  inputMode="decimal"
+                  placeholder="最低"
+                  value={filters.price_min}
+                  onChange={(event) => setFilters((current) => ({ ...current, price_min: event.target.value }))}
+                />
+                <span className="text-muted-foreground">-</span>
+                <Input
+                  className="w-24"
+                  inputMode="decimal"
+                  placeholder="最高"
+                  value={filters.price_max}
+                  onChange={(event) => setFilters((current) => ({ ...current, price_max: event.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">价格排序</label>
+              <NativeSelect
+                className="w-32"
+                value={filters.price_order}
+                onChange={(event) => setFilters((current) => ({ ...current, price_order: event.target.value }))}
+              >
+                <option value="">默认</option>
+                <option value="asc">低到高</option>
+                <option value="desc">高到低</option>
+              </NativeSelect>
+            </div>
+            <Button type="submit">
+              <SearchIcon data-icon="inline-start" />
+              搜索
+            </Button>
+            <Button type="button" variant="outline" onClick={resetSearch}>
+              <RotateCcwIcon data-icon="inline-start" />
+              重置
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
       {selectedIds.size > 0 ? (
         <div className="flex items-center gap-3 rounded-lg border bg-muted/40 px-4 py-2.5">
           <span className="text-sm font-medium">已选 {selectedIds.size} 个渠道</span>
@@ -1031,6 +1151,13 @@ export function AdminChannelsPage() {
           )}
         </Table>
       </Card>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-muted-foreground">
+          共 {total} 个渠道，每页 {channelPageSize} 个
+        </div>
+        <TablePagination current={page} total={total} pageSize={channelPageSize} onChange={setPage} />
+      </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="w-[min(calc(100vw-2rem),1280px)] max-w-none sm:max-w-[1280px]">

@@ -76,6 +76,41 @@ func MarkExhaustedAndRotate(ctx context.Context, poolID, poolKeyID, entityID int
 	return rotatePoolKey(ctx, poolID, entityID, assignKey, poolKeyID)
 }
 
+// RotatePoolKeySkipping 在当前请求内轮转到下一个可用 Key，不会把已试 Key 标记为耗尽。
+// 用于 521/504 这类上游网关错误：本次请求先试同池其它 Key，全部失败后再交给渠道级重试。
+func RotatePoolKeySkipping(ctx context.Context, poolID, entityID int64, skipKeyIDs []int64) (*model.PoolKey, error) {
+	skip := make(map[int64]bool, len(skipKeyIDs))
+	for _, id := range skipKeyIDs {
+		if id > 0 {
+			skip[id] = true
+		}
+	}
+
+	var keys []model.PoolKey
+	if err := db.Engine.Where("pool_id = ? AND is_active = true", poolID).
+		OrderBy("priority ASC, id ASC").Find(&keys); err != nil {
+		return nil, fmt.Errorf("key pool %d: db error: %w", poolID, err)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("号池 %d 暂无可用 Key", poolID)
+	}
+
+	assignKey := fmt.Sprintf(assignKeyFmt, poolID, entityID)
+	for i := range keys {
+		k := &keys[i]
+		if skip[k.ID] {
+			continue
+		}
+		exhaustedKey := fmt.Sprintf(exhaustedKeyFmt, k.ID)
+		exists, _ := cache.Client.Exists(ctx, exhaustedKey).Result()
+		if exists == 0 {
+			cache.Client.Set(ctx, assignKey, fmt.Sprintf("%d", k.ID), 0)
+			return k, nil
+		}
+	}
+	return nil, fmt.Errorf("号池 %d 的可用 Key 均已尝试", poolID)
+}
+
 // rotatePoolKey 从池中选择第一个未耗尽的可用 Key（跳过 skipKeyID），并写入分配记录。
 func rotatePoolKey(ctx context.Context, poolID, _ int64, assignKey string, skipKeyID int64) (*model.PoolKey, error) {
 	var keys []model.PoolKey

@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"fanapi/internal/cache"
@@ -86,6 +87,106 @@ func ListChannels(ctx context.Context) ([]model.Channel, error) {
 }
 
 // CreateChannel 插入一个新渠道。
+const channelListCreditsPerCNY = 1_000_000.0
+
+type ChannelListQuery struct {
+	Page        int
+	Size        int
+	Name        string
+	DisplayName string
+	Keyword     string
+	PriceMin    *float64
+	PriceMax    *float64
+	SortBy      string
+	SortOrder   string
+}
+
+type ChannelListResult struct {
+	Channels []model.Channel
+	Total    int64
+	Page     int
+	Size     int
+}
+
+func ListChannelsPaged(ctx context.Context, query ChannelListQuery) (*ChannelListResult, error) {
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.Size < 1 {
+		query.Size = 20
+	}
+	if query.Size > 100 {
+		query.Size = 100
+	}
+
+	var channels []model.Channel
+	if err := db.Engine.OrderBy("priority ASC, id DESC").Find(&channels); err != nil {
+		return nil, err
+	}
+
+	filtered := make([]model.Channel, 0, len(channels))
+	nameFilter := strings.ToLower(strings.TrimSpace(query.Name))
+	displayNameFilter := strings.ToLower(strings.TrimSpace(query.DisplayName))
+	keywordFilter := strings.ToLower(strings.TrimSpace(query.Keyword))
+	for _, ch := range channels {
+		if nameFilter != "" && !containsFold(ch.Name, nameFilter) {
+			continue
+		}
+		if displayNameFilter != "" && !containsFold(ch.DisplayName, displayNameFilter) {
+			continue
+		}
+		if keywordFilter != "" && !channelMatchesKeyword(ch, keywordFilter) {
+			continue
+		}
+		priceCNY := channelBasePrice(ch) / channelListCreditsPerCNY
+		if query.PriceMin != nil && priceCNY < *query.PriceMin {
+			continue
+		}
+		if query.PriceMax != nil && priceCNY > *query.PriceMax {
+			continue
+		}
+		filtered = append(filtered, ch)
+	}
+
+	if strings.EqualFold(query.SortBy, "price") {
+		desc := strings.EqualFold(query.SortOrder, "desc")
+		sort.SliceStable(filtered, func(i, j int) bool {
+			leftPrice := channelBasePrice(filtered[i])
+			rightPrice := channelBasePrice(filtered[j])
+			if leftPrice != rightPrice {
+				if desc {
+					return leftPrice > rightPrice
+				}
+				return leftPrice < rightPrice
+			}
+			return filtered[i].ID > filtered[j].ID
+		})
+	}
+
+	total := int64(len(filtered))
+	start := (query.Page - 1) * query.Size
+	if start >= len(filtered) {
+		return &ChannelListResult{Channels: []model.Channel{}, Total: total, Page: query.Page, Size: query.Size}, nil
+	}
+	end := start + query.Size
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return &ChannelListResult{Channels: filtered[start:end], Total: total, Page: query.Page, Size: query.Size}, nil
+}
+
+func containsFold(value, needleLower string) bool {
+	return strings.Contains(strings.ToLower(value), needleLower)
+}
+
+func channelMatchesKeyword(ch model.Channel, needleLower string) bool {
+	return containsFold(ch.Name, needleLower) ||
+		containsFold(ch.DisplayName, needleLower) ||
+		containsFold(ch.Model, needleLower) ||
+		containsFold(ch.Type, needleLower) ||
+		containsFold(ch.Protocol, needleLower)
+}
+
 func CreateChannel(ctx context.Context, ch *model.Channel) error {
 	_, err := db.Engine.Insert(ch)
 	if err == nil {

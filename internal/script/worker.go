@@ -122,6 +122,7 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 		ChannelID:       job.ChannelID,
 		PoolKeyID:       job.PoolKeyID,
 		RetryCount:      job.RetryCount,
+		PoolRetryKeyIDs: job.PoolRetryKeyIDs,
 		Payload:         job.Payload, // 保留下来以便服务器在 OutcomeRateLimited / 稳定密钥重试时重新发布
 		RetryChannelIDs: job.RetryChannelIDs,
 	}
@@ -195,6 +196,15 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 		}
 		return fail("upstream rate limited")
 	}
+	if isPoolKeyRetryStatus(statusCode) {
+		if job.PoolKeyID > 0 {
+			base.Outcome = model.OutcomePoolKeyRetry
+			base.ErrorMsg = fmt.Sprintf("upstream returned %d", statusCode)
+			base.PoolRetryKeyIDs = appendPoolRetryKeyID(base.PoolRetryKeyIDs, job.PoolKeyID)
+			return base
+		}
+		return fail(fmt.Sprintf("upstream returned %d", statusCode))
+	}
 
 	upstreamResp := make(map[string]interface{})
 	for k, v := range respData {
@@ -266,6 +276,22 @@ func execJob(ctx context.Context, job *model.TaskJob) *model.WorkerResult {
 	base.Outcome = model.OutcomeDone
 	base.Result = result
 	return base
+}
+
+func isPoolKeyRetryStatus(statusCode int) bool {
+	return statusCode == http.StatusGatewayTimeout || statusCode == 521
+}
+
+func appendPoolRetryKeyID(ids []int64, id int64) []int64 {
+	if id <= 0 {
+		return ids
+	}
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
 }
 
 func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[string]interface{}, int, error) {
@@ -342,7 +368,7 @@ func callUpstream(job *model.TaskJob, payload map[string]interface{}) (map[strin
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
-	if resp.StatusCode == http.StatusTooManyRequests {
+	if resp.StatusCode == http.StatusTooManyRequests || isPoolKeyRetryStatus(resp.StatusCode) {
 		return nil, resp.StatusCode, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

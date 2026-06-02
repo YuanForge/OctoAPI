@@ -111,6 +111,7 @@ func handleResult(msg *nats.Msg) {
 			PoolKeyValue:    newKey.Value,
 			Payload:         res.Payload,
 			RetryCount:      res.RetryCount + 1,
+			PoolRetryKeyIDs: res.PoolRetryKeyIDs,
 			RetryChannelIDs: res.RetryChannelIDs, // 透传：429 轮转 Key 重试若仍失败，仍可触发稳定密钥换渠道重试
 		}
 		data, _ := json.Marshal(job)
@@ -120,6 +121,60 @@ func handleResult(msg *nats.Msg) {
 		}
 		_ = msg.Ack()
 		return
+
+	case model.OutcomePoolKeyRetry:
+		poolRetryChannel, channelErr := service.GetChannel(ctx, res.ChannelID)
+		if channelErr == nil && poolRetryChannel.KeyPoolID > 0 && res.PoolKeyID > 0 {
+			triedKeyIDs := appendResultPoolKeyID(res.PoolRetryKeyIDs, res.PoolKeyID)
+			newKey, rotateErr := service.RotatePoolKeySkipping(ctx, poolRetryChannel.KeyPoolID, res.UserID, triedKeyIDs)
+			if rotateErr == nil && newKey != nil {
+				job := &model.TaskJob{
+					TaskID:          res.TaskID,
+					TaskType:        res.TaskType,
+					UserID:          res.UserID,
+					APIKeyID:        res.APIKeyID,
+					CorrID:          res.CorrID,
+					CreditsCharged:  res.CreditsCharged,
+					ChannelID:       res.ChannelID,
+					BaseURL:         poolRetryChannel.BaseURL,
+					Method:          poolRetryChannel.Method,
+					Headers:         poolRetryChannel.Headers,
+					TimeoutMs:       poolRetryChannel.TimeoutMs,
+					QueryTimeoutMs:  poolRetryChannel.QueryTimeoutMs,
+					RequestScript:   poolRetryChannel.RequestScript,
+					ResponseScript:  poolRetryChannel.ResponseScript,
+					ErrorScript:     poolRetryChannel.ErrorScript,
+					QueryURL:        poolRetryChannel.QueryURL,
+					QueryMethod:     poolRetryChannel.QueryMethod,
+					QueryScript:     poolRetryChannel.QueryScript,
+					PoolKeyID:       newKey.ID,
+					PoolKeyValue:    newKey.Value,
+					Payload:         res.Payload,
+					RetryCount:      res.RetryCount,
+					PoolRetryKeyIDs: triedKeyIDs,
+					RetryChannelIDs: res.RetryChannelIDs,
+				}
+				updateProcessingTask(ctx, res.TaskID, upstreamReq, upstreamResp)
+				data, _ := json.Marshal(job)
+				subject := fmt.Sprintf("task.%s.%d", res.TaskType, res.ChannelID)
+				if publishErr := mq.Publish(subject, data); publishErr != nil {
+					saveAndFail(ctx, res, upstreamReq, upstreamResp, "pool key retry publish failed: "+publishErr.Error())
+				}
+				_ = msg.Ack()
+				return
+			}
+			res.PoolRetryKeyIDs = triedKeyIDs
+			if res.ErrorMsg == "" {
+				res.ErrorMsg = "pool key retry exhausted: " + fmt.Sprint(rotateErr)
+			}
+		} else {
+			if channelErr != nil {
+				res.ErrorMsg = "pool key retry channel load failed: " + channelErr.Error()
+			} else if res.ErrorMsg == "" {
+				res.ErrorMsg = "pool key retry unavailable"
+			}
+		}
+		fallthrough
 
 	case model.OutcomeFailed:
 		if len(upstreamReq) > 0 || len(upstreamResp) > 0 {
@@ -293,6 +348,32 @@ func saveAndFail(ctx context.Context, res model.WorkerResult, req, resp model.JS
 
 // failTaskDB 将任务标记为失败并退还 credits。
 // 幂等操作：通过条件更新 (status != 'failed') 保持幂等。
+func updateProcessingTask(ctx context.Context, taskID int64, req, resp model.JSON) {
+	task := &model.Task{Status: "processing"}
+	cols := []string{"status"}
+	if len(req) > 0 {
+		task.UpstreamRequest = req
+		cols = append(cols, "upstream_request")
+	}
+	if len(resp) > 0 {
+		task.UpstreamResponse = resp
+		cols = append(cols, "upstream_response")
+	}
+	db.Engine.Context(ctx).Where("id = ?", taskID).Cols(cols...).Update(task)
+}
+
+func appendResultPoolKeyID(ids []int64, id int64) []int64 {
+	if id <= 0 {
+		return ids
+	}
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
 func failTaskDB(ctx context.Context, taskID, userID, channelID, apiKeyID int64, corrID string, credits int64, errMsg string) {
 	log.Printf("[result-proc] task %d failed: %s", taskID, errMsg)
 	userMsg := service.UserFacingErrorMessage(errMsg)

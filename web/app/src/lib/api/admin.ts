@@ -453,9 +453,10 @@ export const adminApi = {
   getStatsTrend: (days: 7 | 30, dim: 'revenue' | 'cost' | 'profit' | 'calls') =>
     http.get<{ points: AdminTrendPoint[]; dim: string; days: number }>('/admin/stats/trend', { params: { days, dim } }),
   getStatsTop: () => http.get<AdminTopStats>('/admin/stats/top'),
-  listChannels: () =>
-    http.get<{ channels?: AdminChannel[]; items?: AdminChannel[] } | AdminChannel[]>(
-      '/admin/channels'
+  listChannels: (params: Record<string, unknown> = {}) =>
+    http.get<{ channels?: AdminChannel[]; items?: AdminChannel[]; total?: number; page?: number; size?: number } | AdminChannel[]>(
+      '/admin/channels',
+      { params }
     ),
   createChannel: (payload: Partial<AdminChannel>) =>
     http.post<AdminChannel>('/admin/channels', payload),

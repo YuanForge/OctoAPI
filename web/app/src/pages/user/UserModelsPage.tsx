@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { BlocksIcon, Copy, Search, TerminalSquare } from 'lucide-react'
 
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -26,52 +27,53 @@ type LangTab = 'curl' | 'python' | 'php' | 'go' | 'java'
 type SunoMode = 'inspire' | 'custom' | 'extend' | 'overpainting' | 'underpainting'
 
 const typeOptions = [
-  { label: '全部', value: '' },
-  { label: 'LLM 对话', value: 'llm' },
-  { label: 'Image 绘图', value: 'image' },
-  { label: 'Video 视频', value: 'video' },
-  { label: 'Audio 语音', value: 'audio' },
-  { label: 'Music 音乐', value: 'music' },
+  { labelKey: 'models.allTypes', value: '' },
+  { labelKey: 'models.llm', value: 'llm' },
+  { labelKey: 'models.image', value: 'image' },
+  { labelKey: 'models.video', value: 'video' },
+  { labelKey: 'models.audio', value: 'audio' },
+  { labelKey: 'models.music', value: 'music' },
 ]
 
 const protocolLabels: Record<string, string> = {
-  openai: 'OpenAI 兼容',
-  claude: 'Claude 原生',
-  gemini: 'Gemini 原生',
+  openai: 'models.openaiCompatible',
+  claude: 'models.claudeNative',
+  gemini: 'models.geminiNative',
 }
 
 const billingTypeLabels: Record<string, string> = {
-  token: 'Token 计费',
-  image: '按图计费',
-  video: '按秒计费',
-  audio: '按秒计费',
-  music: '按任务计费',
-  count: '按次计费',
-  custom: '自定义计费',
+  token: 'models.tokenBilling',
+  image: 'models.imageBilling',
+  video: 'models.videoBilling',
+  audio: 'models.audioBilling',
+  music: 'models.musicBilling',
+  count: 'models.countBilling',
+  custom: 'models.customBilling',
 }
 
 function copyText(text: string, label = '已复制') {
   void copyToClipboard(text, { successMessage: label })
 }
 
-function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode) {
+function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode, language: string) {
+  const isEnglish = language.startsWith('en')
   const model = channel.routing_model || channel.name
   if (channel.type === 'llm') {
     if (channel.protocol === 'gemini') {
       return JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: '你好，请介绍一下自己' }] }],
+        contents: [{ role: 'user', parts: [{ text: isEnglish ? 'Hello, please introduce yourself.' : '你好，请介绍一下自己' }] }],
       }, null, 2)
     }
     return JSON.stringify({
       model,
-      messages: [{ role: 'user', content: '你好，请介绍一下自己' }],
+      messages: [{ role: 'user', content: isEnglish ? 'Hello, please introduce yourself.' : '你好，请介绍一下自己' }],
       stream: false,
     }, null, 2)
   }
   if (channel.type === 'image') {
     return JSON.stringify({
       model,
-      prompt: '一只可爱的橘猫坐在阳光下',
+      prompt: isEnglish ? 'A cute orange cat sitting in the sunlight' : '一只可爱的橘猫坐在阳光下',
       size: '1k',
       aspect_ratio: '1:1',
       n: 1,
@@ -80,7 +82,7 @@ function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode) {
   if (channel.type === 'video') {
     return JSON.stringify({
       model,
-      prompt: '海浪拍打岸边，夕阳西下',
+      prompt: isEnglish ? 'Ocean waves hitting the shore at sunset' : '海浪拍打岸边，夕阳西下',
       size: '720p',
       aspect_ratio: '16:9',
       duration: '5',
@@ -89,7 +91,7 @@ function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode) {
   if (channel.type === 'audio') {
     return JSON.stringify({
       model,
-      input: '你好，欢迎使用语音合成服务',
+      input: isEnglish ? 'Hello, welcome to the speech synthesis service.' : '你好，欢迎使用语音合成服务',
       voice: 'alloy',
     }, null, 2)
   }
@@ -98,8 +100,10 @@ function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode) {
       return JSON.stringify({
         model,
         input_type: '20',
-        prompt: '[主歌]\n周四的阳光晒脸庞\n微风轻轻吹过窗\n\n[副歌]\n周四快乐不散场\n欢声笑语满心房',
-        title: '周四快乐',
+        prompt: isEnglish
+          ? '[Verse]\nMorning light across my face\nA gentle breeze through the window\n\n[Chorus]\nKeep the good times rolling\nLaughter filling up the room'
+          : '[主歌]\n周四的阳光晒脸庞\n微风轻轻吹过窗\n\n[副歌]\n周四快乐不散场\n欢声笑语满心房',
+        title: isEnglish ? 'Bright Morning' : '周四快乐',
         tags: 'pop,female voice',
         mv_version: 'chirp-v5',
         make_instrumental: false,
@@ -109,8 +113,10 @@ function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode) {
       return JSON.stringify({
         model,
         input_type: '20',
-        prompt: '[Verse 1]\n小狗汪汪叫\n尾巴甩甩跳\n\n[Chorus]\n汪汪汪谁在听\n汪汪汪快乐行',
-        title: '为你歌唱',
+        prompt: isEnglish
+          ? '[Verse 1]\nCity lights are fading\nFootsteps moving with the rain\n\n[Chorus]\nSing it out, keep on dreaming\nEvery night can start again'
+          : '[Verse 1]\n小狗汪汪叫\n尾巴甩甩跳\n\n[Chorus]\n汪汪汪谁在听\n汪汪汪快乐行',
+        title: isEnglish ? 'Sing for You' : '为你歌唱',
         tags: '',
         mv_version: 'chirp-v5',
         make_instrumental: false,
@@ -152,7 +158,9 @@ function buildChannelRequestBody(channel: UserChannel, sunoMode: SunoMode) {
     return JSON.stringify({
       model,
       input_type: '10',
-      gpt_description_prompt: '轻快的爵士乐，适合咖啡馆氛围，女声演唱',
+      gpt_description_prompt: isEnglish
+        ? 'Light jazz for a warm cafe atmosphere, female vocal'
+        : '轻快的爵士乐，适合咖啡馆氛围，女声演唱',
       mv_version: 'chirp-v5',
       make_instrumental: false,
     }, null, 2)
@@ -175,10 +183,10 @@ function getChannelEndpoint(channel: UserChannel) {
   return endpointMap[channel.type ?? 'llm'] || '/v1/chat/completions'
 }
 
-function getChannelCode(channel: UserChannel, lang: LangTab, sunoMode: SunoMode) {
+function getChannelCode(channel: UserChannel, lang: LangTab, sunoMode: SunoMode, language: string) {
   const origin = window.location.origin
   const endpoint = getChannelEndpoint(channel)
-  const body = buildChannelRequestBody(channel, sunoMode)
+  const body = buildChannelRequestBody(channel, sunoMode, language)
   if (lang === 'curl') {
     return `curl -X POST "${origin}${endpoint}" \\\n+  -H "Content-Type: application/json" \\\n+  -H "Authorization: Bearer YOUR_API_KEY" \\\n+  -d '${body}'`
   }
@@ -214,7 +222,7 @@ function getTaskCode(lang: LangTab) {
   return `import java.net.http.*;\nimport java.net.URI;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        var request = HttpRequest.newBuilder()\n            .uri(URI.create("${origin}/v1/tasks/YOUR_TASK_ID"))\n            .header("Authorization", "Bearer YOUR_API_KEY")\n            .GET()\n            .build();\n\n        var response = HttpClient.newHttpClient()\n            .send(request, HttpResponse.BodyHandlers.ofString());\n        System.out.println(response.body());\n    }\n}`
 }
 
-function getChannelResponse(channel: UserChannel) {
+function getChannelResponse(channel: UserChannel, language: string) {
   if (channel.type === 'llm') {
     return JSON.stringify({
       id: 'chatcmpl-abc123',
@@ -222,7 +230,12 @@ function getChannelResponse(channel: UserChannel) {
       model: channel.routing_model || channel.name,
       choices: [{
         index: 0,
-        message: { role: 'assistant', content: '你好！我是一个人工智能助手，很高兴认识你。请问有什么我可以帮助你的吗？' },
+        message: {
+          role: 'assistant',
+          content: language.startsWith('en')
+            ? 'Hello! I am an AI assistant. Nice to meet you. How can I help?'
+            : '你好！我是一个人工智能助手，很高兴认识你。请问有什么我可以帮助你的吗？',
+        },
         finish_reason: 'stop',
       }],
       usage: { prompt_tokens: 12, completion_tokens: 34, total_tokens: 46 },
@@ -232,6 +245,7 @@ function getChannelResponse(channel: UserChannel) {
 }
 
 export function UserModelsPage() {
+  const { i18n, t } = useTranslation()
   const { data: channels, loading, error, reload } = useAsync(async () => {
     const response = await userApi.listChannels()
     return Array.isArray(response) ? response : response.channels ?? []
@@ -288,23 +302,34 @@ export function UserModelsPage() {
     setDocVisible(true)
   }
 
+  function getProtocolLabel(protocol: string) {
+    const key = protocolLabels[protocol]
+    return key ? t(key) : protocol
+  }
+
+  function getBillingTypeLabel(billingType?: string) {
+    if (!billingType) return '—'
+    const key = billingTypeLabels[billingType]
+    return key ? t(key) : billingType
+  }
+
   return (
     <>
       <PageHeader
-        eyebrow="Catalog"
-        title="模型列表"
-        description="查看当前可用模型、协议、价格说明与调用示例。"
+        eyebrow={t('models.eyebrow')}
+        title={t('models.title')}
+        description={t('models.description')}
         actions={
           <>
             <Button variant="outline" onClick={openBalanceDocs} className="hidden sm:inline-flex">
               <TerminalSquare data-icon="inline-start" />
-              查余额 API
+              {t('models.balanceApi')}
             </Button>
             <Button variant="outline" onClick={openTaskDocs} className="hidden sm:inline-flex">
               <TerminalSquare data-icon="inline-start" />
-              异步任务 API
+              {t('models.taskApi')}
             </Button>
-            {error ? <Button size="sm" variant="outline" onClick={reload}>重试</Button> : null}
+            {error ? <Button size="sm" variant="outline" onClick={reload}>{t('common.retry')}</Button> : null}
           </>
         }
       />
@@ -323,7 +348,7 @@ export function UserModelsPage() {
               className="cursor-pointer px-3 py-1"
               onClick={() => setFilterType(option.value)}
             >
-              {option.label}
+              {t(option.labelKey)}
             </Badge>
           ))}
         </div>
@@ -334,7 +359,7 @@ export function UserModelsPage() {
               className="cursor-pointer px-3 py-1"
               onClick={() => setFilterProtocol('')}
             >
-              全部协议
+              {t('models.allProtocols')}
             </Badge>
             {protocolOptions.map((protocol) => (
               <Badge
@@ -343,18 +368,18 @@ export function UserModelsPage() {
                 className="cursor-pointer px-3 py-1"
                 onClick={() => setFilterProtocol(protocol)}
               >
-                {protocolLabels[protocol] ?? protocol}
+                {getProtocolLabel(protocol)}
               </Badge>
             ))}
           </div>
         ) : null}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-sm font-medium text-muted-foreground">共 {filteredChannels.length} 个模型</span>
+          <span className="text-sm font-medium text-muted-foreground">{t('models.modelCount', { count: filteredChannels.length })}</span>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               className="w-[280px] pl-9"
-              placeholder="搜索模型名称、标识或描述"
+              placeholder={t('models.searchPlaceholder')}
               value={filterName}
               onChange={(event) => setFilterName(event.target.value)}
             />
@@ -377,8 +402,8 @@ export function UserModelsPage() {
       ) : filteredChannels.length === 0 ? (
         <EmptyState
           icon={<BlocksIcon className="size-6 text-muted-foreground" />}
-          title="暂无模型数据"
-          description="没有找到匹配条件的模型数据。"
+          title={t('models.emptyTitle')}
+          description={t('models.emptyDescription')}
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -404,15 +429,15 @@ export function UserModelsPage() {
                         className="hidden shrink-0 text-muted-foreground hover:text-foreground group-hover:block"
                         onClick={(event) => {
                           event.stopPropagation()
-                          copyText(channel.routing_model || channel.name || '', '已复制模型标识')
+                          copyText(channel.routing_model || channel.name || '', t('models.copiedModelId'))
                         }}
                       >
                         <Copy className="h-3.5 w-3.5" />
                       </button>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
-                      <Badge variant="outline">{protocolLabels[channel.protocol || 'openai'] ?? (channel.protocol || 'openai')}</Badge>
-                      {channel.billing_type ? <Badge variant="outline">{billingTypeLabels[channel.billing_type] ?? channel.billing_type}</Badge> : null}
+                      <Badge variant="outline">{getProtocolLabel(channel.protocol || 'openai')}</Badge>
+                      {channel.billing_type ? <Badge variant="outline">{getBillingTypeLabel(channel.billing_type)}</Badge> : null}
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
                       {channel.price_display ? (
@@ -420,21 +445,21 @@ export function UserModelsPage() {
                           <div key={lineIndex} className={lineIndex === 0 ? 'font-medium text-primary/80' : 'text-[10px]'}>{line}</div>
                         ))
                       ) : (
-                        <div>按量计费</div>
+                        <div>{t('models.meteredBilling')}</div>
                       )}
-                      {channel.group_price ? <div className="mt-1 font-medium text-emerald-600">专属价：{channel.group_price}</div> : null}
+                      {channel.group_price ? <div className="mt-1 font-medium text-emerald-600">{t('models.groupPrice', { price: channel.group_price })}</div> : null}
                     </div>
                   </div>
                 </div>
                 <p className="min-h-10 text-xs leading-5 text-muted-foreground line-clamp-2">
-                  {channel.description || '暂无模型描述，可打开详情查看调用示例与响应格式。'}
+                  {channel.description || t('models.fallbackDescription')}
                 </p>
                 <div className="mt-auto flex items-center justify-between gap-3 border-t pt-3 text-xs font-medium">
                   <div className="rounded bg-muted/40 px-2 py-1 font-mono text-muted-foreground">
                     {channel.routing_model || channel.model || channel.name}
                   </div>
                   <div className="flex items-center text-emerald-600">
-                    <span className="mr-1.5 h-2 w-2 rounded-full bg-emerald-500" />可用
+                    <span className="mr-1.5 h-2 w-2 rounded-full bg-emerald-500" />{t('common.available')}
                   </div>
                 </div>
               </CardContent>
@@ -447,7 +472,7 @@ export function UserModelsPage() {
         <SheetContent side="right" className="flex w-[90vw] flex-col overflow-y-auto p-0 sm:max-w-2xl">
           <SheetHeader className="shrink-0 border-b p-6 pb-2">
             <SheetTitle>
-              {docMode === 'balance' ? 'API：查询账户余额' : docMode === 'task' ? 'API：查询任务结果' : docChannel?.name}
+              {docMode === 'balance' ? t('models.balanceTitle') : docMode === 'task' ? t('models.taskTitle') : docChannel?.name}
             </SheetTitle>
           </SheetHeader>
           <div className="flex-1 space-y-6 bg-muted/10 p-6">
@@ -457,28 +482,28 @@ export function UserModelsPage() {
                   <div className="rounded border border-emerald-200 bg-emerald-100 px-3 py-1 text-sm font-bold tracking-wide text-emerald-800">GET</div>
                   <div className="flex flex-1 items-center rounded border bg-background px-3 py-1 font-mono">
                     <span className="flex-1">/user/balance</span>
-                    <button onClick={() => copyText(`GET ${window.location.origin}/user/balance`)} className="hover:text-primary"><Copy className="h-4 w-4" /></button>
+                    <button onClick={() => copyText(`GET ${window.location.origin}/user/balance`, t('common.copied'))} className="hover:text-primary"><Copy className="h-4 w-4" /></button>
                   </div>
                 </div>
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 text-sm leading-relaxed text-blue-900">
-                  返回当前 API Key 对应账户的余额。balance_credits 为内部精度值，balance_cny 为等值积分数。
+                  {t('models.balanceDescription')}
                 </div>
                 <div>
                   <h4 className="mb-2 flex items-center justify-between font-semibold">
-                    请求头
-                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText('Authorization: Bearer YOUR_API_KEY')}>
+                    {t('models.requestHeaders')}
+                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText('Authorization: Bearer YOUR_API_KEY', t('common.copied'))}>
                       <Copy data-icon="inline-start" />
-                      复制头
+                      {t('common.copyHeaders')}
                     </Button>
                   </h4>
                   <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm text-zinc-50">Authorization: Bearer YOUR_API_KEY</pre>
                 </div>
                 <div>
                   <h4 className="mb-2 flex items-center justify-between font-semibold">
-                    调用示例
-                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText(getBalanceCode(langTab))}>
+                    {t('models.callExample')}
+                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText(getBalanceCode(langTab), t('common.copied'))}>
                       <Copy data-icon="inline-start" />
-                      复制代码
+                      {t('common.copyCode')}
                     </Button>
                   </h4>
                   <Tabs value={langTab} onValueChange={(value) => setLangTab(value as LangTab)}>
@@ -493,7 +518,7 @@ export function UserModelsPage() {
                   <pre className="min-h-[140px] overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm whitespace-pre-wrap text-zinc-50">{getBalanceCode(langTab)}</pre>
                 </div>
                 <div>
-                  <h4 className="mb-2 font-semibold">响应示例</h4>
+                  <h4 className="mb-2 font-semibold">{t('models.responseExample')}</h4>
                   <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm text-green-400">{JSON.stringify({ balance_credits: 1971573, balance_cny: 1.971573 }, null, 2)}</pre>
                 </div>
               </div>
@@ -505,18 +530,18 @@ export function UserModelsPage() {
                   <div className="rounded border border-emerald-200 bg-emerald-100 px-3 py-1 text-sm font-bold tracking-wide text-emerald-800">GET</div>
                   <div className="flex flex-1 items-center rounded border bg-background px-3 py-1 font-mono">
                     <span className="flex-1">/v1/tasks/{'{id}'}</span>
-                    <button onClick={() => copyText(`${window.location.origin}/v1/tasks/YOUR_TASK_ID`)} className="hover:text-primary"><Copy className="h-4 w-4" /></button>
+                    <button onClick={() => copyText(`${window.location.origin}/v1/tasks/YOUR_TASK_ID`, t('common.copied'))} className="hover:text-primary"><Copy className="h-4 w-4" /></button>
                   </div>
                 </div>
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 text-sm leading-relaxed text-blue-900">
-                  轮询图片、视频、音频、音乐任务执行结果。code=150 进行中，code=200 成功，code=500 失败。
+                  {t('models.taskDescription')}
                 </div>
                 <div>
                   <h4 className="mb-2 flex items-center justify-between font-semibold">
-                    调用示例
-                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText(getTaskCode(langTab))}>
+                    {t('models.callExample')}
+                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText(getTaskCode(langTab), t('common.copied'))}>
                       <Copy data-icon="inline-start" />
-                      复制代码
+                      {t('common.copyCode')}
                     </Button>
                   </h4>
                   <Tabs value={langTab} onValueChange={(value) => setLangTab(value as LangTab)}>
@@ -531,7 +556,7 @@ export function UserModelsPage() {
                   <pre className="min-h-[140px] overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm whitespace-pre-wrap text-zinc-50">{getTaskCode(langTab)}</pre>
                 </div>
                 <div>
-                  <h4 className="mb-2 font-semibold">响应示例</h4>
+                  <h4 className="mb-2 font-semibold">{t('models.responseExample')}</h4>
                   <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm text-green-400">{JSON.stringify({ task_id: '12345', status: 1, code: 200, msg: 'success', url: '', credits_charged: 3600 }, null, 2)}</pre>
                 </div>
               </div>
@@ -543,52 +568,52 @@ export function UserModelsPage() {
                   <div className="rounded border border-blue-200 bg-blue-100 px-3 py-1 text-sm font-bold tracking-wide text-blue-800">POST</div>
                   <div className="flex flex-1 items-center rounded border bg-background px-3 py-1 font-mono">
                     <span className="flex-1">{getChannelEndpoint(docChannel)}</span>
-                    <button onClick={() => copyText(`${window.location.origin}${getChannelEndpoint(docChannel)}`)} className="hover:text-primary"><Copy className="h-4 w-4" /></button>
+                    <button onClick={() => copyText(`${window.location.origin}${getChannelEndpoint(docChannel)}`, t('common.copied'))} className="hover:text-primary"><Copy className="h-4 w-4" /></button>
                   </div>
                 </div>
 
                 <div className="grid gap-3 rounded-xl border bg-background p-4 sm:grid-cols-2">
                   <div>
-                    <div className="text-xs text-muted-foreground">模型标识</div>
+                    <div className="text-xs text-muted-foreground">{t('models.modelId')}</div>
                     <div className="mt-1 font-mono text-sm font-medium">{docChannel.routing_model || docChannel.name}</div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">协议</div>
-                    <div className="mt-1 text-sm font-medium">{protocolLabels[docChannel.protocol || 'openai'] ?? (docChannel.protocol || 'openai')}</div>
+                    <div className="text-xs text-muted-foreground">{t('models.protocol')}</div>
+                    <div className="mt-1 text-sm font-medium">{getProtocolLabel(docChannel.protocol || 'openai')}</div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">计费方式</div>
-                    <div className="mt-1 text-sm font-medium">{docChannel.billing_type ? (billingTypeLabels[docChannel.billing_type] ?? docChannel.billing_type) : '—'}</div>
+                    <div className="text-xs text-muted-foreground">{t('models.billingType')}</div>
+                    <div className="mt-1 text-sm font-medium">{getBillingTypeLabel(docChannel.billing_type)}</div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">专属价格</div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm font-medium text-emerald-600">{docChannel.group_price || '无差异'}</div>
+                    <div className="text-xs text-muted-foreground">{t('models.exclusivePrice')}</div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm font-medium text-emerald-600">{docChannel.group_price || t('common.noDifference')}</div>
                   </div>
                 </div>
 
                 <div className="rounded-xl border bg-accent/50 p-4 text-sm leading-relaxed">
-                  <div className="whitespace-pre-wrap font-medium">{docChannel.price_display || '暂无默认价格说明'}</div>
+                  <div className="whitespace-pre-wrap font-medium">{docChannel.price_display || t('models.defaultPriceEmpty')}</div>
                   {docChannel.description ? <div className="mt-3 whitespace-pre-wrap text-muted-foreground">{docChannel.description}</div> : null}
                 </div>
 
                 {docChannel.type === 'music' ? (
                   <Tabs value={sunoMode} onValueChange={(value) => setSunoMode(value as SunoMode)}>
                     <TabsList className="grid h-auto w-full grid-cols-5 py-1">
-                      <TabsTrigger value="inspire" className="text-xs">描述模式</TabsTrigger>
-                      <TabsTrigger value="custom" className="text-xs">定制模式</TabsTrigger>
-                      <TabsTrigger value="extend" className="text-xs">延长模式</TabsTrigger>
-                      <TabsTrigger value="overpainting" className="text-xs">重绘主歌</TabsTrigger>
-                      <TabsTrigger value="underpainting" className="text-xs">重绘前奏</TabsTrigger>
+                      <TabsTrigger value="inspire" className="text-xs">{t('models.inspireMode')}</TabsTrigger>
+                      <TabsTrigger value="custom" className="text-xs">{t('models.customMode')}</TabsTrigger>
+                      <TabsTrigger value="extend" className="text-xs">{t('models.extendMode')}</TabsTrigger>
+                      <TabsTrigger value="overpainting" className="text-xs">{t('models.overpaintingMode')}</TabsTrigger>
+                      <TabsTrigger value="underpainting" className="text-xs">{t('models.underpaintingMode')}</TabsTrigger>
                     </TabsList>
                   </Tabs>
                 ) : null}
 
                 <div>
                   <h4 className="mb-2 flex items-center justify-between font-semibold">
-                    调用示例
-                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText(getChannelCode(docChannel, langTab, sunoMode))}>
+                    {t('models.callExample')}
+                    <Button variant="ghost" size="sm" className="h-7" onClick={() => copyText(getChannelCode(docChannel, langTab, sunoMode, i18n.language), t('common.copied'))}>
                       <Copy data-icon="inline-start" />
-                      复制代码
+                      {t('common.copyCode')}
                     </Button>
                   </h4>
                   <Tabs value={langTab} onValueChange={(value) => setLangTab(value as LangTab)}>
@@ -600,13 +625,13 @@ export function UserModelsPage() {
                       <TabsTrigger value="java">Java</TabsTrigger>
                     </TabsList>
                   </Tabs>
-                  <pre className="min-h-[140px] overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm whitespace-pre-wrap text-zinc-50">{getChannelCode(docChannel, langTab, sunoMode)}</pre>
+                  <pre className="min-h-[140px] overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm whitespace-pre-wrap text-zinc-50">{getChannelCode(docChannel, langTab, sunoMode, i18n.language)}</pre>
                 </div>
 
                 <div>
-                  <h4 className="mb-2 font-semibold">响应示例</h4>
+                  <h4 className="mb-2 font-semibold">{t('models.responseExample')}</h4>
                   <pre className={cn('overflow-auto rounded-xl bg-zinc-950 p-4 font-mono text-sm text-green-400', docChannel.type !== 'llm' && 'opacity-80')}>
-                    {getChannelResponse(docChannel)}
+                    {getChannelResponse(docChannel, i18n.language)}
                   </pre>
                 </div>
               </div>

@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   ActivityIcon,
   ArrowRightIcon,
@@ -29,6 +30,7 @@ import {
 } from 'lucide-react'
 
 import { AppLogo } from '@/components/shared/AppLogo'
+import { LanguageSwitcher } from '@/components/shared/LanguageSwitcher'
 import { ThemeToggle } from '@/components/shared/ThemeToggle'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -38,8 +40,8 @@ import { getRoleToken } from '@/lib/auth/storage'
 import { cn } from '@/lib/utils'
 
 type Feature = {
-  title: string
-  description: string
+  titleKey: string
+  descriptionKey: string
   Icon: ComponentType<{ className?: string }>
   tone: string
   span?: string
@@ -58,16 +60,16 @@ const modelPills = [
 ]
 
 const stats = [
-  { value: '40+', label: '上游渠道' },
-  { value: '5类', label: 'AI 能力' },
-  { value: 'OpenAI', label: '兼容协议' },
-  { value: '秒级', label: '计费统计' },
+  { valueKey: 'home.statsUpstreamsValue', labelKey: 'home.statsUpstreams' },
+  { valueKey: 'home.statsCapabilitiesValue', labelKey: 'home.statsCapabilities' },
+  { valueKey: 'home.statsProtocolValue', labelKey: 'home.statsProtocol' },
+  { valueKey: 'home.statsBillingValue', labelKey: 'home.statsBilling' },
 ]
 
 const features: Feature[] = [
   {
-    title: '统一 AI 网关',
-    description: '把文本、图像、视频、音乐和语音模型接到同一个 API 入口，业务侧只需要维护一套调用方式。',
+    titleKey: 'home.featureGatewayTitle',
+    descriptionKey: 'home.featureGatewayDesc',
     Icon: NetworkIcon,
     tone: 'text-sky-600 bg-sky-500/10 ring-sky-500/20',
     span: 'lg:col-span-2',
@@ -85,8 +87,8 @@ const features: Feature[] = [
     ),
   },
   {
-    title: '密钥与额度',
-    description: '面向用户发放 API Key，按调用扣费，余额、充值和兑换都在同一套账户体系内完成。',
+    titleKey: 'home.featureKeysTitle',
+    descriptionKey: 'home.featureKeysDesc',
     Icon: KeyRoundIcon,
     tone: 'text-emerald-600 bg-emerald-500/10 ring-emerald-500/20',
     preview: (
@@ -101,8 +103,8 @@ const features: Feature[] = [
     ),
   },
   {
-    title: '实时可观测',
-    description: '请求日志、用量统计、任务状态和错误排查集中沉淀，运营和开发都能快速定位问题。',
+    titleKey: 'home.featureObserveTitle',
+    descriptionKey: 'home.featureObserveDesc',
     Icon: ActivityIcon,
     tone: 'text-violet-600 bg-violet-500/10 ring-violet-500/20',
     preview: (
@@ -118,8 +120,8 @@ const features: Feature[] = [
     ),
   },
   {
-    title: '多协议接入',
-    description: '兼容 OpenAI 习惯路径，也能承接 Gemini、Claude 等不同模型协议，降低迁移成本。',
+    titleKey: 'home.featureProtocolTitle',
+    descriptionKey: 'home.featureProtocolDesc',
     Icon: Code2Icon,
     tone: 'text-amber-600 bg-amber-500/10 ring-amber-500/20',
     span: 'lg:col-span-2',
@@ -135,23 +137,25 @@ const features: Feature[] = [
 
 const workflow = [
   {
-    title: '创建 API Key',
-    description: '注册后进入控制台，一键创建用于业务调用的密钥。',
+    titleKey: 'home.workflowKeyTitle',
+    descriptionKey: 'home.workflowKeyDesc',
     Icon: KeyRoundIcon,
   },
   {
-    title: '选择模型能力',
-    description: '在模型列表查看协议、价格和调用示例。',
+    titleKey: 'home.workflowModelTitle',
+    descriptionKey: 'home.workflowModelDesc',
     Icon: BlocksIcon,
   },
   {
-    title: '接入并监控',
-    description: '通过网关调用模型，在日志和统计里追踪成本与效果。',
+    titleKey: 'home.workflowMonitorTitle',
+    descriptionKey: 'home.workflowMonitorDesc',
     Icon: BarChart3Icon,
   },
 ]
 
 function PublicHeader({ siteName, logoUrl, signedIn }: { siteName: string; logoUrl: string; signedIn: boolean }) {
+  const { t } = useTranslation()
+
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/88 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
@@ -159,28 +163,29 @@ function PublicHeader({ siteName, logoUrl, signedIn }: { siteName: string; logoU
           <AppLogo siteName={siteName} logoUrl={logoUrl} label="AI Gateway" />
         </Link>
         <nav className="hidden items-center gap-7 text-sm font-medium text-muted-foreground md:flex">
-          <a href="#features" className="transition hover:text-foreground">能力</a>
-          <a href="#models" className="transition hover:text-foreground">模型</a>
-          <a href="#workflow" className="transition hover:text-foreground">接入</a>
-          <Link to="/docs" className="transition hover:text-foreground">文档</Link>
+          <a href="#features" className="transition hover:text-foreground">{t('common.features')}</a>
+          <a href="#models" className="transition hover:text-foreground">{t('common.models')}</a>
+          <a href="#workflow" className="transition hover:text-foreground">{t('common.workflow')}</a>
+          <Link to="/docs" className="transition hover:text-foreground">{t('common.docs')}</Link>
         </nav>
         <div className="flex items-center gap-2">
+          <LanguageSwitcher />
           <ThemeToggle />
           {signedIn ? (
             <Button asChild>
               <Link to="/dashboard">
-                控制台
+                {t('common.dashboard')}
                 <ArrowRightIcon data-icon="inline-end" />
               </Link>
             </Button>
           ) : (
             <>
               <Button asChild variant="ghost" className="hidden sm:inline-flex">
-                <Link to="/login">登录</Link>
+                <Link to="/login">{t('common.login')}</Link>
               </Button>
               <Button asChild>
                 <Link to="/register">
-                  开始使用
+                  {t('common.startUsing')}
                   <ArrowRightIcon data-icon="inline-end" />
                 </Link>
               </Button>
@@ -254,12 +259,13 @@ function ApiTerminal() {
 }
 
 function CapabilityStrip() {
+  const { t } = useTranslation()
   const items = [
-    { label: '文本对话', Icon: MessageSquareTextIcon },
-    { label: '图像生成', Icon: ImageIcon },
-    { label: '视频任务', Icon: VideoIcon },
-    { label: '音乐创作', Icon: MusicIcon },
-    { label: '异步轮询', Icon: RadioTowerIcon },
+    { label: t('home.capabilityText'), Icon: MessageSquareTextIcon },
+    { label: t('home.capabilityImage'), Icon: ImageIcon },
+    { label: t('home.capabilityVideo'), Icon: VideoIcon },
+    { label: t('home.capabilityMusic'), Icon: MusicIcon },
+    { label: t('home.capabilityAsync'), Icon: RadioTowerIcon },
   ]
 
   return (
@@ -278,6 +284,7 @@ function CapabilityStrip() {
 }
 
 export function PublicHomePage() {
+  const { t } = useTranslation()
   const { settings } = useSiteSettings()
   const signedIn = Boolean(getRoleToken('user'))
   const { siteName, logoUrl } = settings
@@ -301,31 +308,31 @@ export function PublicHomePage() {
             <div className="max-w-3xl">
               <Badge className="mb-5 border-primary/20 bg-primary/10 px-3 py-1 text-primary" variant="outline">
                 <SparklesIcon data-icon="inline-start" />
-                面向 AI 应用的统一模型网关
+                {t('home.badge')}
               </Badge>
               <h1 className="text-4xl font-semibold leading-tight tracking-tight text-foreground sm:text-5xl lg:text-6xl">
                 {siteName}
-                <span className="block text-primary">统一接入多模型 API</span>
+                <span className="block text-primary">{t('home.headline')}</span>
               </h1>
               <p className="mt-6 max-w-xl text-base leading-8 text-muted-foreground sm:text-lg">
-                把上游模型、密钥、计费、任务和日志统一到一个平台。开发者用熟悉的 API 调用，运营者在控制台管理渠道、价格和用量。
+                {t('home.subhead')}
               </p>
               <div className="mt-8 flex flex-wrap items-center gap-3">
                 <Button asChild size="lg" className="h-11 px-5">
                   <Link to={signedIn ? '/dashboard' : '/register'}>
-                    {signedIn ? '进入控制台' : '立即开始'}
+                    {signedIn ? t('home.primaryCtaSignedIn') : t('home.primaryCtaGuest')}
                     <ArrowRightIcon data-icon="inline-end" />
                   </Link>
                 </Button>
                 <Button asChild size="lg" variant="outline" className="h-11 px-5">
                   <Link to="/models">
-                    查看模型
+                    {t('home.viewModels')}
                     <BlocksIcon data-icon="inline-end" />
                   </Link>
                 </Button>
                 <Button asChild size="lg" variant="ghost" className="h-11 px-5">
                   <Link to="/docs">
-                    阅读文档
+                    {t('home.readDocs')}
                     <BookOpenIcon data-icon="inline-end" />
                   </Link>
                 </Button>
@@ -340,9 +347,9 @@ export function PublicHomePage() {
         <section className="border-y border-border/60 bg-card/40">
           <div className="mx-auto grid max-w-7xl grid-cols-2 gap-px bg-border/60 px-0 sm:grid-cols-4">
             {stats.map((item) => (
-              <div key={item.label} className="bg-background px-6 py-8 text-center">
-                <div className="text-2xl font-semibold tracking-tight sm:text-3xl">{item.value}</div>
-                <div className="mt-1 text-sm text-muted-foreground">{item.label}</div>
+              <div key={item.labelKey} className="bg-background px-6 py-8 text-center">
+                <div className="text-2xl font-semibold tracking-tight sm:text-3xl">{t(item.valueKey)}</div>
+                <div className="mt-1 text-sm text-muted-foreground">{t(item.labelKey)}</div>
               </div>
             ))}
           </div>
@@ -351,10 +358,10 @@ export function PublicHomePage() {
         <section className="px-4 py-16 sm:px-6 lg:py-20">
           <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div className="max-w-xl">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">API Preview</p>
-              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">一个入口，路由到不同模型与任务。</h2>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">{t('home.apiPreviewKicker')}</p>
+              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('home.apiPreviewTitle')}</h2>
               <p className="mt-4 text-base leading-7 text-muted-foreground">
-                参考 new-api 的产品叙事方式：首页直接展示“统一网关”的调用路径，让开发者第一眼明白这是可接入的 API 产品。
+                {t('home.apiPreviewDesc')}
               </p>
             </div>
             <ApiTerminal />
@@ -364,22 +371,22 @@ export function PublicHomePage() {
         <section id="features" className="px-4 py-20 sm:px-6 lg:py-24">
           <div className="mx-auto max-w-7xl">
             <div className="mb-10 max-w-2xl">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Core Features</p>
-              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">官网是入口，控制台才是引擎。</h2>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">{t('home.coreKicker')}</p>
+              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('home.coreTitle')}</h2>
               <p className="mt-4 text-base leading-7 text-muted-foreground">
-                首页突出产品价值，用户进来后再进入现有后台完成模型查看、密钥创建、充值和日志排查。
+                {t('home.coreDesc')}
               </p>
             </div>
             <div className="grid gap-px overflow-hidden rounded-xl border border-border/70 bg-border/70 lg:grid-cols-3">
-              {features.map(({ title, description, Icon, tone, span, preview }) => (
-                <article key={title} className={cn('bg-background p-6 transition hover:bg-muted/30', span)}>
+              {features.map(({ titleKey, descriptionKey, Icon, tone, span, preview }) => (
+                <article key={titleKey} className={cn('bg-background p-6 transition hover:bg-muted/30', span)}>
                   <div className="mb-5 flex items-center gap-3">
                     <span className={cn('flex size-10 items-center justify-center rounded-lg ring-1', tone)}>
                       <Icon className="size-5" />
                     </span>
-                    <h3 className="text-base font-semibold">{title}</h3>
+                    <h3 className="text-base font-semibold">{t(titleKey)}</h3>
                   </div>
-                  <p className="min-h-14 text-sm leading-6 text-muted-foreground">{description}</p>
+                  <p className="min-h-14 text-sm leading-6 text-muted-foreground">{t(descriptionKey)}</p>
                   <div className="mt-6">{preview}</div>
                 </article>
               ))}
@@ -390,21 +397,21 @@ export function PublicHomePage() {
         <section id="models" className="border-y border-border/60 bg-muted/25 px-4 py-20 sm:px-6 lg:py-24">
           <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Model Hub</p>
-              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">覆盖从对话到内容生成的完整链路。</h2>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">{t('home.modelHubKicker')}</p>
+              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('home.modelHubTitle')}</h2>
               <p className="mt-4 text-base leading-7 text-muted-foreground">
-                模型列表继续作为公开入口展示可用能力，用户可以先看清楚协议、价格和示例，再决定注册接入。
+                {t('home.modelHubDesc')}
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Button asChild>
                   <Link to="/models">
-                    浏览模型列表
+                    {t('home.browseModels')}
                     <ArrowRightIcon data-icon="inline-end" />
                   </Link>
                 </Button>
                 <Button asChild variant="outline">
                   <Link to="/docs">
-                    API 文档
+                    {t('home.apiDocs')}
                     <TerminalSquareIcon data-icon="inline-end" />
                   </Link>
                 </Button>
@@ -412,16 +419,16 @@ export function PublicHomePage() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               {[
-                { title: 'LLM 对话', desc: 'OpenAI 兼容消息格式，适合聊天、总结和 Agent。', Icon: MessageSquareTextIcon },
-                { title: '图像生成', desc: '文生图、图像任务和结果回调/轮询统一管理。', Icon: ImageIcon },
-                { title: '视频生成', desc: '异步任务中心承接长耗时视频生成工作流。', Icon: VideoIcon },
-                { title: '音乐生成', desc: '歌词、风格、续写等音乐模型能力纳入同一账户。', Icon: MusicIcon },
-              ].map(({ title, desc, Icon }) => (
-                <Card key={title} className="rounded-lg border border-border/70 shadow-sm">
+                { titleKey: 'home.llmTitle', descKey: 'home.llmDesc', Icon: MessageSquareTextIcon },
+                { titleKey: 'home.imageTitle', descKey: 'home.imageDesc', Icon: ImageIcon },
+                { titleKey: 'home.videoTitle', descKey: 'home.videoDesc', Icon: VideoIcon },
+                { titleKey: 'home.musicTitle', descKey: 'home.musicDesc', Icon: MusicIcon },
+              ].map(({ titleKey, descKey, Icon }) => (
+                <Card key={titleKey} className="rounded-lg border border-border/70 shadow-sm">
                   <CardContent className="p-5">
                     <Icon className="mb-4 size-5 text-primary" />
-                    <h3 className="font-semibold">{title}</h3>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">{desc}</p>
+                    <h3 className="font-semibold">{t(titleKey)}</h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">{t(descKey)}</p>
                   </CardContent>
                 </Card>
               ))}
@@ -432,20 +439,20 @@ export function PublicHomePage() {
         <section id="workflow" className="px-4 py-20 sm:px-6 lg:py-24">
           <div className="mx-auto max-w-7xl">
             <div className="mb-12 text-center">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Workflow</p>
-              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">三步接入，后续都在控制台里跑。</h2>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-primary">{t('home.workflowKicker')}</p>
+              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('home.workflowTitle')}</h2>
             </div>
             <div className="grid gap-5 md:grid-cols-3">
-              {workflow.map(({ title, description, Icon }, index) => (
-                <div key={title} className="relative rounded-xl border border-border/70 bg-card p-6">
+              {workflow.map(({ titleKey, descriptionKey, Icon }, index) => (
+                <div key={titleKey} className="relative rounded-xl border border-border/70 bg-card p-6">
                   <span className="absolute right-5 top-5 text-5xl font-semibold leading-none text-muted/80">
                     {index + 1}
                   </span>
                   <div className="mb-6 flex size-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
                     <Icon className="size-6" />
                   </div>
-                  <h3 className="text-lg font-semibold">{title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-muted-foreground">{description}</p>
+                  <h3 className="text-lg font-semibold">{t(titleKey)}</h3>
+                  <p className="mt-3 text-sm leading-6 text-muted-foreground">{t(descriptionKey)}</p>
                 </div>
               ))}
             </div>
@@ -462,20 +469,20 @@ export function PublicHomePage() {
                   </span>
                 ))}
               </div>
-              <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">让用户先看到产品，再进入后台。</h2>
+              <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t('home.finalTitle')}</h2>
               <p className="mt-3 max-w-2xl text-sm leading-7 text-background/70">
-                首页负责建立信任和路径感，现有用户端继续负责实际操作。两者分开后，网站会更像一个完整产品，而不是只有登录后的工具面板。
+                {t('home.finalDesc')}
               </p>
             </div>
             <div className="flex flex-wrap gap-3 lg:justify-end">
               <Button asChild variant="secondary" className="bg-background text-foreground hover:bg-background/90">
                 <Link to={signedIn ? '/dashboard' : '/register'}>
-                  {signedIn ? '进入控制台' : '注册账号'}
+                  {signedIn ? t('home.primaryCtaSignedIn') : t('home.registerAccount')}
                   <ArrowRightIcon data-icon="inline-end" />
                 </Link>
               </Button>
               <Button asChild variant="outline" className="border-background/30 bg-transparent text-background hover:bg-background/10 hover:text-background">
-                <Link to="/login">登录</Link>
+                <Link to="/login">{t('common.login')}</Link>
               </Button>
             </div>
           </div>
@@ -486,9 +493,9 @@ export function PublicHomePage() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <span>{siteName} AI Gateway</span>
           <div className="flex gap-5">
-            <Link to="/models" className="hover:text-foreground">模型</Link>
-            <Link to="/docs" className="hover:text-foreground">文档</Link>
-            <Link to="/login" className="hover:text-foreground">登录</Link>
+            <Link to="/models" className="hover:text-foreground">{t('home.footerProduct')}</Link>
+            <Link to="/docs" className="hover:text-foreground">{t('common.docs')}</Link>
+            <Link to="/login" className="hover:text-foreground">{t('common.login')}</Link>
           </div>
         </div>
       </footer>

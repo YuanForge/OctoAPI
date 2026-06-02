@@ -392,6 +392,38 @@ func shouldConvertRequestBody(clientProto, channelProto string, reqData map[stri
 	return false
 }
 
+func isPoolKeyRetryStatus(statusCode int) bool {
+	return statusCode == http.StatusGatewayTimeout || statusCode == 521
+}
+
+func appendPoolKeyID(ids []int64, id int64) []int64 {
+	if id <= 0 {
+		return ids
+	}
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
+func persistLLMUpstreamHeaders(logID int64, sentHeaders map[string]string) {
+	if sentHeaders == nil {
+		return
+	}
+	go func() {
+		db.Engine.Where("id = ?", logID).Cols("upstream_headers").
+			Update(&model.LLMLog{UpstreamHeaders: model.JSON(func() map[string]interface{} {
+				m := make(map[string]interface{}, len(sentHeaders))
+				for k, v := range sentHeaders {
+					m[k] = v
+				}
+				return m
+			}())})
+	}()
+}
+
 // llmProxyWithChannel 执行实际的上游请求，支持失败重试（换渠道）。
 // stableChannels 非空时使用稳定模式（价格升序），否则使用正常负载均衡。
 func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]interface{},
@@ -617,21 +649,47 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 
 	// 6. 号池 Key 已在步骤1分配，直接发送上游请求
 	// 7. 发送上游请求
-	sentHeaders, resp, err := sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
-	if sentHeaders != nil {
-		// 异步写入请求头（不阻塞主流程）
-		logID := llmLog.ID
-		go func() {
-			db.Engine.Where("id = ?", logID).Cols("upstream_headers").
-				Update(&model.LLMLog{UpstreamHeaders: model.JSON(func() map[string]interface{} {
-					m := make(map[string]interface{}, len(sentHeaders))
-					for k, v := range sentHeaders {
-						m[k] = v
-					}
-					return m
-				}())})
-		}()
+	triedPoolKeyIDs := make([]int64, 0, 4)
+	if poolKey != nil {
+		triedPoolKeyIDs = appendPoolKeyID(triedPoolKeyIDs, poolKey.ID)
 	}
+	sentHeaders, resp, err := sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
+	persistLLMUpstreamHeaders(llmLog.ID, sentHeaders)
+
+	if err == nil && resp != nil {
+		// 429 时轮转 Key 重试一次（同渠道）。保留原有行为：重试仍失败则直接终止。
+		if resp.StatusCode == http.StatusTooManyRequests && ch.KeyPoolID > 0 && poolKey != nil {
+			resp.Body.Close()
+			newKey, rotErr := service.MarkExhaustedAndRotate(c.Request.Context(), ch.KeyPoolID, poolKey.ID, entityID)
+			if rotErr == nil && newKey != nil {
+				poolKey = newKey
+				poolKeyIDVal = newKey.ID // 更新 poolKeyIDVal，确保后续结算流水关联正确的号商
+				triedPoolKeyIDs = appendPoolKeyID(triedPoolKeyIDs, newKey.ID)
+				sentHeaders, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
+				persistLLMUpstreamHeaders(llmLog.ID, sentHeaders)
+				if err != nil {
+					service.RecordChannelError(c.Request.Context(), channelID)
+					llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, 0, "上游请求失败(重试): "+err.Error())
+					return
+				}
+			}
+		}
+
+		// 521/504 先在同号池内尝试其它 Key；池内都不可用后再交给原有渠道级重试策略。
+		for err == nil && resp != nil && isPoolKeyRetryStatus(resp.StatusCode) && ch.KeyPoolID > 0 && poolKey != nil {
+			newKey, rotErr := service.RotatePoolKeySkipping(c.Request.Context(), ch.KeyPoolID, entityID, triedPoolKeyIDs)
+			if rotErr != nil || newKey == nil {
+				break
+			}
+			resp.Body.Close()
+			poolKey = newKey
+			poolKeyIDVal = newKey.ID
+			triedPoolKeyIDs = appendPoolKeyID(triedPoolKeyIDs, newKey.ID)
+			sentHeaders, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
+			persistLLMUpstreamHeaders(llmLog.ID, sentHeaders)
+		}
+	}
+
 	if err != nil {
 		service.RecordChannelError(c.Request.Context(), channelID)
 		// 尝试换渠道重试
@@ -652,20 +710,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		return
 	}
 
-	// 429 时轮转 Key 重试一次（同渠道）
-	if resp.StatusCode == http.StatusTooManyRequests && ch.KeyPoolID > 0 && poolKey != nil {
-		resp.Body.Close()
-		newKey, rotErr := service.MarkExhaustedAndRotate(c.Request.Context(), ch.KeyPoolID, poolKey.ID, entityID)
-		if rotErr == nil {
-			poolKey = newKey
-			poolKeyIDVal = newKey.ID // 更新 poolKeyIDVal，确保后续结算流水关联正确的号商
-			_, resp, err = sendLLMRequest(c, ch, mappedReq, poolKey, proto, resolvedModel, isStream, responsesOperation)
-			if err != nil {
-				service.RecordChannelError(c.Request.Context(), channelID)
-				llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, 0, "上游请求失败(重试): "+err.Error())
-				return
-			}
-		}
+	if resp == nil {
+		llmRefundAndAbort(c, corrID, userID, totalHold, upstreamCostHold, poolKeyIDVal, 0, "上游请求失败: empty response")
+		return
 	}
 
 	defer resp.Body.Close()

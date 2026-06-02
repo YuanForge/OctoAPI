@@ -1,6 +1,7 @@
 import type { ComponentType, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   BlocksIcon,
   BookOpenIcon,
@@ -31,6 +32,7 @@ import {
 } from 'lucide-react'
 
 import { AppLogo } from '@/components/shared/AppLogo'
+import { LanguageSwitcher } from '@/components/shared/LanguageSwitcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -69,12 +71,14 @@ import { userApi } from '@/lib/api/user'
 
 export type NavItem = {
   label: string
+  labelKey?: string
   href: string
   icon: ComponentType<{ className?: string }>
 }
 
 export type NavGroup = {
   label?: string
+  labelKey?: string
   items: NavItem[]
   requiresAuth?: boolean
 }
@@ -95,6 +99,7 @@ type ConsoleLayoutProps = {
 }
 
 function HeaderBalanceChip() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [balance, setBalance] = useState<number | null>(null)
   useEffect(() => {
@@ -111,7 +116,7 @@ function HeaderBalanceChip() {
       size="sm"
       className="hidden gap-1.5 rounded-full pl-2 pr-3 sm:inline-flex"
       onClick={() => navigate('/billing')}
-      title="点击充值"
+      title={t('layout.topupTitle')}
     >
       <WalletIcon className="size-4 text-muted-foreground" />
       <span className="font-mono text-xs tabular-nums">¥{(balance / 1e6).toFixed(2)}</span>
@@ -161,6 +166,7 @@ export function ConsoleLayout({
   identity,
   footer,
 }: ConsoleLayoutProps) {
+  const { t } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const { settings } = useSiteSettings()
@@ -179,10 +185,18 @@ export function ConsoleLayout({
   const rawGroups: NavGroup[] = groups ?? (subtitle ? [{ label: subtitle, items }] : [{ items }])
   const navGroups = rawGroups.filter((g) => !g.requiresAuth || isLoggedIn)
 
+  function translateUserLabel(label: string, labelKey?: string) {
+    return role === 'user' && labelKey ? t(labelKey) : label
+  }
+
+  function translateUserText(key: string, fallback: string) {
+    return role === 'user' ? t(key) : fallback
+  }
+
   // Find current page title from active nav item
   const allItems = navGroups.flatMap((g) => g.items)
   const currentItem = allItems.find((item) => location.pathname === item.href)
-  const pageTitle = currentItem?.label ?? title ?? siteName
+  const pageTitle = currentItem ? translateUserLabel(currentItem.label, currentItem.labelKey) : title ?? siteName
 
   function logout() {
     clearRoleToken(role)
@@ -202,17 +216,18 @@ export function ConsoleLayout({
         <SidebarContent>
           {navGroups.map((group, i) => (
             <SidebarGroup key={i}>
-              {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
+              {group.label && <SidebarGroupLabel>{translateUserLabel(group.label, group.labelKey)}</SidebarGroupLabel>}
               <SidebarGroupContent>
                 <SidebarMenu>
                   {group.items.map((item) => {
                     const active = location.pathname === item.href
+                    const itemLabel = translateUserLabel(item.label, item.labelKey)
                     return (
                       <SidebarMenuItem key={item.href}>
-                        <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+                        <SidebarMenuButton asChild isActive={active} tooltip={itemLabel}>
                           <Link to={item.href}>
                             <item.icon />
-                            <span>{item.label}</span>
+                            <span>{itemLabel}</span>
                           </Link>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
@@ -245,16 +260,16 @@ export function ConsoleLayout({
                   onClick={logout}
                 >
                   <LogOutIcon className="size-4" />
-                  退出登录
+                  {translateUserText('layout.logout', '退出登录')}
                 </Button>
               </>
             ) : role === 'user' ? (
               <div className="flex flex-col gap-1 px-1">
                 <Button asChild size="sm" className="w-full">
-                  <Link to="/login">登录</Link>
+                  <Link to="/login">{t('common.login')}</Link>
                 </Button>
                 <Button asChild size="sm" variant="outline" className="w-full">
-                  <Link to="/register">注册</Link>
+                  <Link to="/register">{t('common.register')}</Link>
                 </Button>
               </div>
             ) : null}
@@ -268,16 +283,17 @@ export function ConsoleLayout({
             <span className="text-sm font-semibold">{pageTitle}</span>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {role === 'user' && <LanguageSwitcher />}
             <ContactPopover
               imageUrl={qqGroupUrl}
-              label="QQ 交流群"
-              description="扫码加入 QQ 交流群"
+              label={translateUserText('layout.qqGroup', 'QQ 交流群')}
+              description={translateUserText('layout.qqGroupDesc', '扫码加入 QQ 交流群')}
               Icon={UsersRoundIcon}
             />
             <ContactPopover
               imageUrl={wechatCsUrl}
-              label="微信客服"
-              description="扫码添加微信客服"
+              label={translateUserText('layout.wechatSupport', '微信客服')}
+              description={translateUserText('layout.wechatSupportDesc', '扫码添加微信客服')}
               Icon={MessageCircleIcon}
             />
             {isLoggedIn && role === 'user' && <HeaderBalanceChip />}
@@ -295,7 +311,7 @@ export function ConsoleLayout({
                     <span className="hidden max-w-28 truncate text-sm sm:inline">
                       {displayName ??
                         (role === 'admin' ? '管理员' :
-                         role === 'vendor' ? 'Vendor' : '用户')}
+                         role === 'vendor' ? 'Vendor' : t('layout.userFallback'))}
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
@@ -309,12 +325,12 @@ export function ConsoleLayout({
                   {role === 'user' && !!getRoleToken('admin') && (
                     <DropdownMenuItem onClick={() => { setSiteModePreference('admin'); navigate('/admin/dashboard') }}>
                       <SettingsIcon data-icon="inline-start" />
-                      管理端
+                      {t('layout.adminConsole')}
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem onClick={logout}>
                     <LogOutIcon data-icon="inline-start" />
-                    退出登录
+                    {translateUserText('layout.logout', '退出登录')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -352,33 +368,35 @@ export function ConsoleLayout({
 export const userNavGroups: NavGroup[] = [
   {
     items: [
-      { label: '数据看板', href: '/dashboard', icon: LayoutDashboardIcon },
-      { label: '模型列表', href: '/models', icon: BlocksIcon },
-      { label: '调用日志', href: '/llm-logs', icon: FileClockIcon },
-      { label: '任务中心', href: '/tasks', icon: ListIcon },
-      { label: '使用统计', href: '/stats', icon: TrendingUpIcon },
-      { label: '接口文档', href: '/docs', icon: BookOpenIcon },
+      { label: '数据看板', labelKey: 'layout.navDashboard', href: '/dashboard', icon: LayoutDashboardIcon },
+      { label: '模型列表', labelKey: 'layout.navModels', href: '/models', icon: BlocksIcon },
+      { label: '调用日志', labelKey: 'layout.navLogs', href: '/llm-logs', icon: FileClockIcon },
+      { label: '任务中心', labelKey: 'layout.navTasks', href: '/tasks', icon: ListIcon },
+      { label: '使用统计', labelKey: 'layout.navStats', href: '/stats', icon: TrendingUpIcon },
+      { label: '接口文档', labelKey: 'layout.navDocs', href: '/docs', icon: BookOpenIcon },
     ],
   },
   {
     label: '在线体验',
+    labelKey: 'layout.groupExperience',
     requiresAuth: true,
     items: [
-      { label: '文本对话', href: '/playground', icon: MessageSquareIcon },
-      { label: '图片生成', href: '/image-gen', icon: ImageIcon },
-      { label: '视频生成', href: '/video-gen', icon: VideoIcon },
-      { label: '音乐生成', href: '/music-gen', icon: HeadphonesIcon },
+      { label: '文本对话', labelKey: 'layout.navPlayground', href: '/playground', icon: MessageSquareIcon },
+      { label: '图片生成', labelKey: 'layout.navImageGen', href: '/image-gen', icon: ImageIcon },
+      { label: '视频生成', labelKey: 'layout.navVideoGen', href: '/video-gen', icon: VideoIcon },
+      { label: '音乐生成', labelKey: 'layout.navMusicGen', href: '/music-gen', icon: HeadphonesIcon },
     ],
   },
   {
     label: '账户管理',
+    labelKey: 'layout.groupAccount',
     requiresAuth: true,
     items: [
-      { label: 'API 密钥', href: '/keys', icon: KeySquareIcon },
-      { label: '积分充值', href: '/billing', icon: ShoppingCartIcon },
-      { label: '兑换中心', href: '/exchange', icon: TicketIcon },
-      { label: '个人中心', href: '/profile', icon: UserRoundIcon },
-      { label: '邀请中心', href: '/invite', icon: ShareIcon },
+      { label: 'API 密钥', labelKey: 'layout.navKeys', href: '/keys', icon: KeySquareIcon },
+      { label: '积分充值', labelKey: 'layout.navBilling', href: '/billing', icon: ShoppingCartIcon },
+      { label: '兑换中心', labelKey: 'layout.navExchange', href: '/exchange', icon: TicketIcon },
+      { label: '个人中心', labelKey: 'layout.navProfile', href: '/profile', icon: UserRoundIcon },
+      { label: '邀请中心', labelKey: 'layout.navInvite', href: '/invite', icon: ShareIcon },
     ],
   },
 ]
