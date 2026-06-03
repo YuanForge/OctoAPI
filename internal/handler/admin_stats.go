@@ -23,7 +23,7 @@ func GetAdminStats(c *gin.Context) {
 
 	var todayRow, totalRow sumRow
 
-	today := time.Now().Truncate(24 * time.Hour)
+	todayStart, todayEnd := shanghaiDayRange(time.Now())
 	// revenue = charge(图片/视频/音频一次性扣费) + settle(LLM实际结算) - refund(退款)
 	// cost    = 对应类型的上游成本（refund 抄销对应的预写成本）
 	db.Engine.SQL(`SELECT
@@ -37,7 +37,7 @@ func GetAdminStats(c *gin.Context) {
 			ELSE 0 END),0) AS cost,
 		COUNT(*) AS count
 	FROM billing_transactions
-	WHERE type IN ('charge','settle','hold','refund') AND created_at >= ?`, today).Get(&todayRow)
+	WHERE type IN ('charge','settle','hold','refund') AND created_at >= ? AND created_at < ?`, todayStart, todayEnd).Get(&todayRow)
 
 	db.Engine.SQL(`SELECT
 		COALESCE(SUM(CASE
@@ -136,7 +136,7 @@ ORDER BY day ASC
 
 // GET /admin/stats/top — 今日 TOP10 消耗用户、TOP 模型、TOP 渠道
 func GetAdminStatsTop(c *gin.Context) {
-	today := time.Now().Truncate(24 * time.Hour)
+	todayStart, todayEnd := shanghaiDayRange(time.Now())
 
 	type topRow struct {
 		ID    string  `xorm:"id"`
@@ -148,29 +148,45 @@ func GetAdminStatsTop(c *gin.Context) {
 
 	db.Engine.SQL(`
 SELECT u.id::text AS id, COALESCE(u.username, u.email::text, u.id::text) AS name,
-       SUM(bt.credits)::float8 / 1000000 AS value
+       COALESCE(SUM(CASE
+           WHEN bt.type IN ('charge','settle','hold') THEN bt.credits
+           WHEN bt.type = 'refund' THEN -bt.credits
+           ELSE 0 END),0)::float8 / 1000000 AS value
 FROM billing_transactions bt
 JOIN users u ON u.id = bt.user_id
-WHERE bt.type IN ('charge','settle','hold') AND bt.created_at >= ?
+WHERE bt.type IN ('charge','settle','hold','refund')
+  AND bt.created_at >= ? AND bt.created_at < ?
 GROUP BY u.id, u.username, u.email
-ORDER BY value DESC LIMIT 10`, today).Find(&topUsers)
+HAVING COALESCE(SUM(CASE
+           WHEN bt.type IN ('charge','settle','hold') THEN bt.credits
+           WHEN bt.type = 'refund' THEN -bt.credits
+           ELSE 0 END),0) > 0
+ORDER BY value DESC LIMIT 10`, todayStart, todayEnd).Find(&topUsers)
 
 	db.Engine.SQL(`
 SELECT COALESCE(ll.model,'(unknown)') AS id, COALESCE(ll.model,'(unknown)') AS name,
        COUNT(*)::float8 AS value
 FROM llm_logs ll
-WHERE ll.created_at >= ?
+WHERE ll.created_at >= ? AND ll.created_at < ?
 GROUP BY ll.model
-ORDER BY value DESC LIMIT 10`, today).Find(&topModels)
+ORDER BY value DESC LIMIT 10`, todayStart, todayEnd).Find(&topModels)
 
 	db.Engine.SQL(`
 SELECT c.id::text AS id, COALESCE(c.display_name, c.name, c.id::text) AS name,
-       COUNT(bt.id)::float8 AS value
+       COALESCE(SUM(CASE
+           WHEN bt.type IN ('charge','settle','hold') THEN bt.credits
+           WHEN bt.type = 'refund' THEN -bt.credits
+           ELSE 0 END),0)::float8 / 1000000 AS value
 FROM billing_transactions bt
 JOIN channels c ON c.id = bt.channel_id
-WHERE bt.type IN ('charge','settle','hold') AND bt.created_at >= ?
+WHERE bt.type IN ('charge','settle','hold','refund')
+  AND bt.created_at >= ? AND bt.created_at < ?
 GROUP BY c.id, c.display_name, c.name
-ORDER BY value DESC LIMIT 10`, today).Find(&topChannels)
+HAVING COALESCE(SUM(CASE
+           WHEN bt.type IN ('charge','settle','hold') THEN bt.credits
+           WHEN bt.type = 'refund' THEN -bt.credits
+           ELSE 0 END),0) > 0
+ORDER BY value DESC LIMIT 10`, todayStart, todayEnd).Find(&topChannels)
 
 	toList := func(rows []topRow) []gin.H {
 		out := make([]gin.H, 0, len(rows))
