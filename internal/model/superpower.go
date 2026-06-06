@@ -107,22 +107,25 @@ func (*RiskLabel) TableName() string { return "risk_labels" }
 
 // UpstreamPlatform 上游平台
 type UpstreamPlatform struct {
-	ID              int64      `xorm:"pk autoincr 'id'" json:"id"`
-	Name            string     `xorm:"'name'" json:"name"`
-	PlatformType    string     `xorm:"notnull default('openai') 'platform_type'" json:"platform_type"` // openai / newapi / sub2api
-	BaseURL         string     `xorm:"text 'base_url'" json:"base_url"`
-	APIKeyEnc       string     `xorm:"text 'api_key_enc'" json:"-"`
-	SystemTokenEnc  string     `xorm:"text 'system_token_enc'" json:"-"`
-	UpstreamUserID  string     `xorm:"notnull default('') 'upstream_user_id'" json:"upstream_user_id"`
-	UpstreamGroup   string     `xorm:"notnull default('') 'upstream_group'" json:"upstream_group"`
-	Balance         int64      `xorm:"'balance'" json:"balance"` // credits
-	BalanceAmount   float64    `xorm:"notnull default(0) 'balance_amount'" json:"balance_amount"`
-	BalanceCurrency string     `xorm:"notnull default('CNY') 'balance_currency'" json:"balance_currency"`
-	BalanceSyncedAt *time.Time `xorm:"'balance_synced_at'" json:"balance_synced_at"`
-	IsActive        bool       `xorm:"notnull default(true) 'is_active'" json:"is_active"`
-	Note            string     `xorm:"text 'note'" json:"note"`
-	CreatedAt       time.Time  `xorm:"created 'created_at'" json:"created_at"`
-	UpdatedAt       time.Time  `xorm:"updated 'updated_at'" json:"updated_at"`
+	ID                     int64      `xorm:"pk autoincr 'id'" json:"id"`
+	Name                   string     `xorm:"'name'" json:"name"`
+	PlatformType           string     `xorm:"notnull default('openai') 'platform_type'" json:"platform_type"` // openai / newapi / sub2api
+	BaseURL                string     `xorm:"text 'base_url'" json:"base_url"`
+	APIKeyEnc              string     `xorm:"text 'api_key_enc'" json:"-"`
+	SystemTokenEnc         string     `xorm:"text 'system_token_enc'" json:"-"`
+	UpstreamUserID         string     `xorm:"notnull default('') 'upstream_user_id'" json:"upstream_user_id"`
+	UpstreamGroup          string     `xorm:"notnull default('') 'upstream_group'" json:"upstream_group"`
+	Balance                int64      `xorm:"'balance'" json:"balance"` // credits
+	BalanceAmount          float64    `xorm:"notnull default(0) 'balance_amount'" json:"balance_amount"`
+	BalanceCurrency        string     `xorm:"notnull default('CNY') 'balance_currency'" json:"balance_currency"`
+	BalanceSyncedAt        *time.Time `xorm:"'balance_synced_at'" json:"balance_synced_at"`
+	BalanceAlertThreshold  float64    `xorm:"notnull default(0) 'balance_alert_threshold'" json:"balance_alert_threshold"`
+	BalanceAlertNotified   bool       `xorm:"notnull default(false) 'balance_alert_notified'" json:"balance_alert_notified"`
+	BalanceAlertNotifiedAt *time.Time `xorm:"'balance_alert_notified_at'" json:"balance_alert_notified_at"`
+	IsActive               bool       `xorm:"notnull default(true) 'is_active'" json:"is_active"`
+	Note                   string     `xorm:"text 'note'" json:"note"`
+	CreatedAt              time.Time  `xorm:"created 'created_at'" json:"created_at"`
+	UpdatedAt              time.Time  `xorm:"updated 'updated_at'" json:"updated_at"`
 }
 
 func (*UpstreamPlatform) TableName() string { return "upstream_platforms" }

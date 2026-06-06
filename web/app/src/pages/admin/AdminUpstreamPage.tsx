@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PlusIcon, Pencil1Icon, TrashIcon } from '@radix-ui/react-icons'
 import { Loader2, RefreshCwIcon, ServerIcon } from 'lucide-react'
 
@@ -40,6 +40,7 @@ type PlatformForm = {
   api_key: string
   system_token: string
   upstream_user_id: string
+  balance_alert_threshold: string
   note: string
   is_active: boolean
 }
@@ -51,6 +52,7 @@ const defaultForm: PlatformForm = {
   api_key: '',
   system_token: '',
   upstream_user_id: '',
+  balance_alert_threshold: '',
   note: '',
   is_active: true,
 }
@@ -75,6 +77,13 @@ function supportsBalance(type?: string) {
   return type === 'newapi' || type === 'sub2api'
 }
 
+function formatAlertThreshold(p: AdminUpstreamPlatform) {
+  const threshold = p.balance_alert_threshold ?? 0
+  if (!supportsBalance(p.platform_type) || threshold <= 0) return '关闭'
+  const currency = p.balance_currency || 'CNY'
+  return `${currency} <= ${threshold.toFixed(4)}`
+}
+
 export function AdminUpstreamPage() {
   const { data: platforms, loading, error, reload } = useAsync(async () => {
     const res = await adminApi.listUpstreamPlatforms()
@@ -85,6 +94,11 @@ export function AdminUpstreamPage() {
   const [editing, setEditing] = useState<AdminUpstreamPlatform | null>(null)
   const [form, setForm] = useState<PlatformForm>(defaultForm)
   const [syncingId, setSyncingId] = useState<number | null>(null)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => reload(), 10_000)
+    return () => window.clearInterval(timer)
+  }, [reload])
 
   function openCreate() {
     setEditing({})
@@ -101,6 +115,7 @@ export function AdminUpstreamPage() {
       api_key: '',
       system_token: '',
       upstream_user_id: p.upstream_user_id ?? '',
+      balance_alert_threshold: p.balance_alert_threshold && p.balance_alert_threshold > 0 ? String(p.balance_alert_threshold) : '',
       note: p.note ?? '',
       is_active: p.is_active ?? true,
     })
@@ -109,11 +124,13 @@ export function AdminUpstreamPage() {
 
   async function handleSave() {
     setMutError('')
+    const threshold = Number.parseFloat(form.balance_alert_threshold)
     const payload = {
       name: form.name.trim(),
       platform_type: form.platform_type,
       base_url: form.base_url.trim(),
       upstream_user_id: form.upstream_user_id.trim(),
+      balance_alert_threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 0,
       note: form.note.trim(),
       is_active: form.is_active,
       ...(form.api_key.trim() ? { api_key: form.api_key.trim() } : {}),
@@ -164,7 +181,7 @@ export function AdminUpstreamPage() {
       <PageHeader
         eyebrow="Upstream"
         title="上游平台"
-        description="维护上游账户和余额检测凭据；模型成本在渠道配置中同步。"
+        description="维护上游账户和余额检测凭据；后台每 10 秒自动同步余额并按阈值推送 Lark 告警。"
         actions={
           <Button size="sm" onClick={openCreate}>
             <PlusIcon className="mr-1 size-3.5" />添加平台
@@ -191,16 +208,17 @@ export function AdminUpstreamPage() {
               <TableHead>类型</TableHead>
               <TableHead>Base URL</TableHead>
               <TableHead className="w-36 text-right">可用余额</TableHead>
+              <TableHead className="w-40">低余额告警</TableHead>
               <TableHead>余额凭据</TableHead>
               <TableHead className="w-24">状态</TableHead>
               <TableHead className="w-40">同步时间</TableHead>
               <TableHead className="text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
-          {loading ? <TableSkeleton cols={9} /> : (
+          {loading && platforms.length === 0 ? <TableSkeleton cols={10} /> : (
             <TableBody>
               {platforms.length === 0 ? (
-                <TableEmpty cols={9} Icon={ServerIcon} title="暂无上游平台" description="点击右上角添加。" />
+                <TableEmpty cols={10} Icon={ServerIcon} title="暂无上游平台" description="点击右上角添加。" />
               ) : platforms.map((p) => (
                 <TableRow key={p.id}>
                   <TableCell>{p.id}</TableCell>
@@ -211,6 +229,14 @@ export function AdminUpstreamPage() {
                   <TableCell><Badge variant="outline">{platformLabel(p.platform_type)}</Badge></TableCell>
                   <TableCell className="max-w-[320px] truncate font-mono text-xs text-muted-foreground">{p.base_url}</TableCell>
                   <TableCell className="text-right font-mono">{formatBalance(p)}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant={p.balance_alert_threshold && p.balance_alert_threshold > 0 ? 'outline' : 'secondary'}>
+                        {formatAlertThreshold(p)}
+                      </Badge>
+                      {p.balance_alert_notified ? <Badge variant="destructive">已通知</Badge> : null}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1.5">
                       <Badge variant={p.has_api_key ? 'default' : 'secondary'}>api key</Badge>
@@ -231,7 +257,7 @@ export function AdminUpstreamPage() {
                       {supportsBalance(p.platform_type) ? (
                         <Button size="sm" variant="outline" disabled={syncingId === p.id} onClick={() => syncBalance(p)}>
                           {syncingId === p.id ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCwIcon className="size-3.5" />}
-                          同步余额
+                          立即同步
                         </Button>
                       ) : null}
                       <Button size="sm" variant="outline" onClick={() => openEdit(p)}>
@@ -280,9 +306,20 @@ export function AdminUpstreamPage() {
               <Label>{form.platform_type === 'sub2api' ? '控制台 JWT（可选）' : '系统访问令牌（可选）'}</Label>
               <Input type="password" value={form.system_token} onChange={(e) => setForm((f) => ({ ...f, system_token: e.target.value }))} placeholder={editing?.id ? '留空不修改' : form.platform_type === 'sub2api' ? 'eyJ...' : 'token'} />
             </div>
-            <div className="space-y-1.5 md:col-span-2">
+            <div className="space-y-1.5">
               <Label>上游用户 ID（New API 余额可选）</Label>
               <Input value={form.upstream_user_id} onChange={(e) => setForm((f) => ({ ...f, upstream_user_id: e.target.value }))} placeholder="New-Api-User" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>低余额告警阈值</Label>
+              <Input
+                type="number"
+                min={0}
+                step="0.0001"
+                value={form.balance_alert_threshold}
+                onChange={(e) => setForm((f) => ({ ...f, balance_alert_threshold: e.target.value }))}
+                placeholder="0 = 关闭"
+              />
             </div>
             <div className="space-y-1.5 md:col-span-2">
               <Label>备注</Label>

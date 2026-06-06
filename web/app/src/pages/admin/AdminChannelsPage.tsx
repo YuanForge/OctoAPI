@@ -70,6 +70,7 @@ type ChannelForm = {
   upstream_platform_id: string
   upstream_model: string
   upstream_group: string
+  upstream_cost_auto_sync: boolean
   // markup multiplier (selling price = cost * markup)
   billing_markup: string
   // token billing
@@ -169,6 +170,8 @@ const upstreamMetaKeys = new Set([
   'upstream_base_url',
   'upstream_model',
   'upstream_group',
+  'price_markup',
+  'upstream_cost_auto_sync',
 ])
 const pricingGroupOverrideKeys = new Set([
   'input_price_per_1m_tokens',
@@ -216,6 +219,7 @@ const emptyForm: ChannelForm = {
   upstream_platform_id: '',
   upstream_model: '',
   upstream_group: '',
+  upstream_cost_auto_sync: false,
   billing_markup: '1.2',
   billing_input_price: '',
   billing_output_price: '',
@@ -337,6 +341,20 @@ function getConfigString(cfg: Record<string, unknown>, key: string): string {
     return ''
   }
   return String(value)
+}
+
+function getConfigBool(cfg: Record<string, unknown>, key: string): boolean {
+  const value = cfg[key]
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase())
+  }
+  if (typeof value === 'number') {
+    return value !== 0
+  }
+  return false
 }
 
 function buildAdvancedBillingConfigText(cfg: Record<string, unknown>) {
@@ -597,6 +615,10 @@ function buildBillingConfig(form: ChannelForm): Record<string, unknown> {
   if (upstreamPlatformID > 0) {
     cfg.upstream_platform_id = upstreamPlatformID
     cfg.upstream_model = form.upstream_model.trim() || form.model.trim()
+    cfg.price_markup = markup
+    if (form.upstream_cost_auto_sync) {
+      cfg.upstream_cost_auto_sync = true
+    }
     if (form.upstream_group.trim()) {
       cfg.upstream_group = form.upstream_group.trim()
     }
@@ -629,6 +651,7 @@ function buildFormFromChannel(row: AdminChannel, isCopy = false): ChannelForm {
     upstream_platform_id: getConfigString(billingConfig, 'upstream_platform_id'),
     upstream_model: getConfigString(billingConfig, 'upstream_model') || row.model || row.routing_model || '',
     upstream_group: getConfigString(billingConfig, 'upstream_group'),
+    upstream_cost_auto_sync: getConfigBool(billingConfig, 'upstream_cost_auto_sync'),
     billing_markup: (() => {
       // Infer markup from input price / input cost ratio; fallback to 1.2
       const price = parseAmount(billingConfig.input_price_per_1m_tokens)
@@ -748,6 +771,8 @@ export function AdminChannelsPage() {
   const [upstreamPreview, setUpstreamPreview] = useState<AdminChannelUpstreamCostPreview | null>(null)
   const [upstreamLoading, setUpstreamLoading] = useState(false)
   const [upstreamSyncing, setUpstreamSyncing] = useState(false)
+  const [upstreamPreviewOk, setUpstreamPreviewOk] = useState(false)
+  const [upstreamSyncOk, setUpstreamSyncOk] = useState(false)
   const [pendingDeleteChannel, setPendingDeleteChannel] = useState<AdminChannel | undefined>()
   const [uploadingIcon, setUploadingIcon] = useState(false)
   const iconUploadRef = useRef<HTMLInputElement>(null)
@@ -776,24 +801,48 @@ export function AdminChannelsPage() {
     () => upstreamPlatforms.find((platform) => String(platform.id) === form.upstream_platform_id),
     [form.upstream_platform_id, upstreamPlatforms]
   )
+  const upstreamAutoSyncReady = upstreamPreviewOk && upstreamSyncOk
+  const upstreamAutoSyncDisabled =
+    !form.upstream_cost_auto_sync && (!form.id || !form.upstream_platform_id || !upstreamAutoSyncReady)
+  const upstreamAutoSyncHint = form.upstream_cost_auto_sync
+    ? '已开启；每 10 秒检测一次，上游成本变化时自动同步。修改上游平台、模型、分组或利润倍数后需要重新检测并同步。'
+    : upstreamAutoSyncReady
+      ? '检测和同步都已成功，可以开启自动同步；开启后每 10 秒检测一次成本变化。'
+      : upstreamPreviewOk
+        ? '请先同步成本成功后再开启自动同步。'
+        : '请先检测成本成功，再同步成本后开启自动同步。'
+
+  function resetUpstreamCostGate(patch: Partial<ChannelForm>) {
+    setUpstreamPreview(null)
+    setUpstreamPreviewOk(false)
+    setUpstreamSyncOk(false)
+    setForm((current) => ({ ...current, ...patch, upstream_cost_auto_sync: false }))
+  }
 
   function openCreate() {
     setForm(emptyForm)
     setUpstreamPreview(null)
+    setUpstreamPreviewOk(false)
+    setUpstreamSyncOk(false)
     setOpen(true)
     setMutError('')
   }
 
   function openEdit(row: AdminChannel) {
-    setForm(buildFormFromChannel(row))
+    const nextForm = buildFormFromChannel(row)
+    setForm(nextForm)
     setUpstreamPreview(null)
+    setUpstreamPreviewOk(nextForm.upstream_cost_auto_sync)
+    setUpstreamSyncOk(nextForm.upstream_cost_auto_sync)
     setOpen(true)
     setMutError('')
   }
 
   function openCopy(row: AdminChannel) {
-    setForm(buildFormFromChannel(row, true))
+    setForm({ ...buildFormFromChannel(row, true), upstream_cost_auto_sync: false })
     setUpstreamPreview(null)
+    setUpstreamPreviewOk(false)
+    setUpstreamSyncOk(false)
     setOpen(true)
     setMutError('')
   }
@@ -822,6 +871,10 @@ export function AdminChannelsPage() {
     try {
       const result = await adminApi.previewChannelUpstreamCost(form.id, payload)
       setUpstreamPreview(result)
+      const previewOk = Boolean(result.found && result.price_available)
+      setUpstreamPreviewOk(previewOk)
+      setUpstreamSyncOk(false)
+      setForm((current) => ({ ...current, upstream_cost_auto_sync: false }))
       if (!result.found) {
         toast.error('上游未找到当前模型')
       } else if (!result.price_available) {
@@ -849,15 +902,34 @@ export function AdminChannelsPage() {
       toast.error('请选择上游平台')
       return
     }
+    if (!upstreamPreviewOk) {
+      toast.error('请先检测成本成功后再同步成本')
+      return
+    }
     setUpstreamSyncing(true)
     setMutError('')
     try {
       const result = await adminApi.syncChannelUpstreamCost(form.id, payload)
+      const syncOk = Number(result.price_synced ?? 0) > 0
       if (result.channel) {
-        setForm(buildFormFromChannel(result.channel))
+        setForm((current) => ({
+          ...buildFormFromChannel(result.channel!),
+          upstream_cost_auto_sync: syncOk && current.upstream_cost_auto_sync,
+        }))
       }
-      setUpstreamPreview(result)
-      toast.success(result.price_synced ? '渠道成本已同步' : '渠道已绑定上游，暂无可同步公开成本')
+      setUpstreamPreview((current) => ({
+        ...(current ?? {}),
+        ...result,
+        found: true,
+        price_available: syncOk,
+        price_unavailable: !syncOk,
+      }))
+      setUpstreamPreviewOk(syncOk)
+      setUpstreamSyncOk(syncOk)
+      if (!syncOk) {
+        setForm((current) => ({ ...current, upstream_cost_auto_sync: false }))
+      }
+      toast.success(syncOk ? '渠道成本已同步' : '渠道已绑定上游，暂无可同步公开成本')
       reload()
     } catch (err) {
       const { getApiErrorMessage } = await import('@/lib/api/http')
@@ -918,6 +990,10 @@ export function AdminChannelsPage() {
 
   async function saveChannel() {
     setMutError('')
+    if (form.upstream_cost_auto_sync && !upstreamAutoSyncReady) {
+      toast.error('请先检测成本成功，并同步成本成功后再开启自动同步')
+      return
+    }
     try {
       const payload = {
         name: form.name.trim(),
@@ -1327,7 +1403,7 @@ export function AdminChannelsPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">标准模型名</label>
-                  <Input value={form.model} onChange={(event) => setForm((current) => ({ ...current, model: event.target.value }))} />
+                  <Input value={form.model} onChange={(event) => resetUpstreamCostGate({ model: event.target.value })} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">模型企业</label>
@@ -1582,10 +1658,7 @@ export function AdminChannelsPage() {
                       <label className="text-xs font-medium text-muted-foreground">上游平台</label>
                       <NativeSelect
                         value={form.upstream_platform_id}
-                        onChange={(event) => {
-                          setUpstreamPreview(null)
-                          setForm((current) => ({ ...current, upstream_platform_id: event.target.value }))
-                        }}
+                        onChange={(event) => resetUpstreamCostGate({ upstream_platform_id: event.target.value })}
                       >
                         <option value="">不绑定</option>
                         {upstreamPlatforms.map((platform) => (
@@ -1599,10 +1672,7 @@ export function AdminChannelsPage() {
                       <label className="text-xs font-medium text-muted-foreground">上游模型名</label>
                       <Input
                         value={form.upstream_model}
-                        onChange={(event) => {
-                          setUpstreamPreview(null)
-                          setForm((current) => ({ ...current, upstream_model: event.target.value }))
-                        }}
+                        onChange={(event) => resetUpstreamCostGate({ upstream_model: event.target.value })}
                         placeholder={form.model || '留空使用标准模型名'}
                       />
                     </div>
@@ -1610,10 +1680,7 @@ export function AdminChannelsPage() {
                       <label className="text-xs font-medium text-muted-foreground">上游分组（可选）</label>
                       <Input
                         value={form.upstream_group}
-                        onChange={(event) => {
-                          setUpstreamPreview(null)
-                          setForm((current) => ({ ...current, upstream_group: event.target.value }))
-                        }}
+                        onChange={(event) => resetUpstreamCostGate({ upstream_group: event.target.value })}
                         placeholder="留空使用基础价"
                       />
                     </div>
@@ -1628,12 +1695,27 @@ export function AdminChannelsPage() {
                       </Button>
                       <Button
                         type="button"
-                        disabled={!form.id || !form.upstream_platform_id || upstreamSyncing}
+                        disabled={!form.id || !form.upstream_platform_id || !upstreamPreviewOk || upstreamSyncing}
                         onClick={syncUpstreamCost}
                       >
                         {upstreamSyncing ? '同步中...' : '同步成本'}
                       </Button>
                     </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      id="upstream-cost-auto-sync"
+                      type="checkbox"
+                      checked={form.upstream_cost_auto_sync}
+                      disabled={upstreamAutoSyncDisabled}
+                      onChange={(event) => setForm((current) => ({ ...current, upstream_cost_auto_sync: event.target.checked }))}
+                      className="h-4 w-4 rounded border-input disabled:opacity-50"
+                    />
+                    <label htmlFor="upstream-cost-auto-sync" className="cursor-pointer text-sm font-medium">
+                      自动同步上游成本
+                    </label>
+                    <span className="text-xs text-muted-foreground">{upstreamAutoSyncHint}</span>
                   </div>
 
                   {selectedUpstreamPlatform ? (
@@ -1665,7 +1747,7 @@ export function AdminChannelsPage() {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-sm font-medium">利润倍率</label>
                       <p className="text-xs text-muted-foreground">售价 = 成本 × 倍率。例如填 1.2 表示利润 20%。</p>
-                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => setForm((c) => ({ ...c, billing_markup: e.target.value }))} placeholder="如 1.2" />
+                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => resetUpstreamCostGate({ billing_markup: e.target.value })} placeholder="如 1.2" />
                     </div>
                     <div className="space-y-1 md:col-span-2">
                       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">成本价格</p>
@@ -1709,7 +1791,7 @@ export function AdminChannelsPage() {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-sm font-medium">利润倍率</label>
                       <p className="text-xs text-muted-foreground">售价 = 成本 × 倍率。例如填 1.2 表示利润 20%。</p>
-                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => setForm((c) => ({ ...c, billing_markup: e.target.value }))} placeholder="如 1.2" />
+                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => resetUpstreamCostGate({ billing_markup: e.target.value })} placeholder="如 1.2" />
                     </div>
                     <div className="space-y-1 md:col-span-2">
                       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">按档位成本（size_costs）</p>
@@ -1750,7 +1832,7 @@ export function AdminChannelsPage() {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-sm font-medium">利润倍率</label>
                       <p className="text-xs text-muted-foreground">售价 = 成本 × 倍率。例如填 1.2 表示利润 20%。</p>
-                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => setForm((c) => ({ ...c, billing_markup: e.target.value }))} placeholder="如 1.2" />
+                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => resetUpstreamCostGate({ billing_markup: e.target.value })} placeholder="如 1.2" />
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium">进价（CNY / 秒）</label>
@@ -1764,7 +1846,7 @@ export function AdminChannelsPage() {
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-sm font-medium">利润倍率</label>
                       <p className="text-xs text-muted-foreground">售价 = 成本 × 倍率。例如填 1.2 表示利润 20%。</p>
-                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => setForm((c) => ({ ...c, billing_markup: e.target.value }))} placeholder="如 1.2" />
+                      <Input type="number" step="0.01" value={form.billing_markup} onChange={(e) => resetUpstreamCostGate({ billing_markup: e.target.value })} placeholder="如 1.2" />
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium">进价（CNY / 次）</label>

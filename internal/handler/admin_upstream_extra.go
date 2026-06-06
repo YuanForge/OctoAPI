@@ -7,15 +7,18 @@ import (
 	"errors"
 	"fanapi/internal/db"
 	"fanapi/internal/model"
+	"fanapi/internal/notify"
 	"fanapi/internal/service"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -28,34 +31,38 @@ const (
 )
 
 type upstreamPlatformPayload struct {
-	Name           string  `json:"name"`
-	PlatformType   string  `json:"platform_type"`
-	BaseURL        string  `json:"base_url"`
-	APIKey         string  `json:"api_key"`
-	SystemToken    string  `json:"system_token"`
-	UpstreamUserID *string `json:"upstream_user_id"`
-	UpstreamGroup  *string `json:"upstream_group"`
-	Note           string  `json:"note"`
-	IsActive       *bool   `json:"is_active"`
+	Name                  string   `json:"name"`
+	PlatformType          string   `json:"platform_type"`
+	BaseURL               string   `json:"base_url"`
+	APIKey                string   `json:"api_key"`
+	SystemToken           string   `json:"system_token"`
+	UpstreamUserID        *string  `json:"upstream_user_id"`
+	UpstreamGroup         *string  `json:"upstream_group"`
+	Note                  string   `json:"note"`
+	IsActive              *bool    `json:"is_active"`
+	BalanceAlertThreshold *float64 `json:"balance_alert_threshold"`
 }
 
 type upstreamPlatformDTO struct {
-	ID              int64      `json:"id"`
-	Name            string     `json:"name"`
-	PlatformType    string     `json:"platform_type"`
-	BaseURL         string     `json:"base_url"`
-	UpstreamUserID  string     `json:"upstream_user_id"`
-	UpstreamGroup   string     `json:"upstream_group"`
-	Balance         int64      `json:"balance"`
-	BalanceAmount   float64    `json:"balance_amount"`
-	BalanceCurrency string     `json:"balance_currency"`
-	BalanceSyncedAt *time.Time `json:"balance_synced_at"`
-	IsActive        bool       `json:"is_active"`
-	Note            string     `json:"note"`
-	HasAPIKey       bool       `json:"has_api_key"`
-	HasSystemToken  bool       `json:"has_system_token"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                     int64      `json:"id"`
+	Name                   string     `json:"name"`
+	PlatformType           string     `json:"platform_type"`
+	BaseURL                string     `json:"base_url"`
+	UpstreamUserID         string     `json:"upstream_user_id"`
+	UpstreamGroup          string     `json:"upstream_group"`
+	Balance                int64      `json:"balance"`
+	BalanceAmount          float64    `json:"balance_amount"`
+	BalanceCurrency        string     `json:"balance_currency"`
+	BalanceSyncedAt        *time.Time `json:"balance_synced_at"`
+	BalanceAlertThreshold  float64    `json:"balance_alert_threshold"`
+	BalanceAlertNotified   bool       `json:"balance_alert_notified"`
+	BalanceAlertNotifiedAt *time.Time `json:"balance_alert_notified_at"`
+	IsActive               bool       `json:"is_active"`
+	Note                   string     `json:"note"`
+	HasAPIKey              bool       `json:"has_api_key"`
+	HasSystemToken         bool       `json:"has_system_token"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 type upstreamPricingModel struct {
@@ -138,22 +145,25 @@ func upstreamPlatformToDTO(p model.UpstreamPlatform) upstreamPlatformDTO {
 		currency = "CNY"
 	}
 	return upstreamPlatformDTO{
-		ID:              p.ID,
-		Name:            p.Name,
-		PlatformType:    typ,
-		BaseURL:         p.BaseURL,
-		UpstreamUserID:  p.UpstreamUserID,
-		UpstreamGroup:   p.UpstreamGroup,
-		Balance:         p.Balance,
-		BalanceAmount:   p.BalanceAmount,
-		BalanceCurrency: currency,
-		BalanceSyncedAt: p.BalanceSyncedAt,
-		IsActive:        p.IsActive,
-		Note:            p.Note,
-		HasAPIKey:       p.APIKeyEnc != "",
-		HasSystemToken:  p.SystemTokenEnc != "",
-		CreatedAt:       p.CreatedAt,
-		UpdatedAt:       p.UpdatedAt,
+		ID:                     p.ID,
+		Name:                   p.Name,
+		PlatformType:           typ,
+		BaseURL:                p.BaseURL,
+		UpstreamUserID:         p.UpstreamUserID,
+		UpstreamGroup:          p.UpstreamGroup,
+		Balance:                p.Balance,
+		BalanceAmount:          p.BalanceAmount,
+		BalanceCurrency:        currency,
+		BalanceSyncedAt:        p.BalanceSyncedAt,
+		BalanceAlertThreshold:  p.BalanceAlertThreshold,
+		BalanceAlertNotified:   p.BalanceAlertNotified,
+		BalanceAlertNotifiedAt: p.BalanceAlertNotifiedAt,
+		IsActive:               p.IsActive,
+		Note:                   p.Note,
+		HasAPIKey:              p.APIKeyEnc != "",
+		HasSystemToken:         p.SystemTokenEnc != "",
+		CreatedAt:              p.CreatedAt,
+		UpdatedAt:              p.UpdatedAt,
 	}
 }
 
@@ -219,7 +229,8 @@ func UpdateUpstreamPlatform(c *gin.Context) {
 	patch.ID = id
 	if _, err := db.Engine.ID(id).Cols(
 		"name", "platform_type", "base_url", "api_key_enc", "system_token_enc",
-		"upstream_user_id", "upstream_group", "is_active", "note",
+		"upstream_user_id", "upstream_group", "balance_alert_threshold",
+		"balance_alert_notified", "balance_alert_notified_at", "is_active", "note",
 	).Update(patch); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -265,16 +276,144 @@ func SyncUpstreamPlatformBalance(c *gin.Context) {
 	if !ok {
 		return
 	}
-	balance, err := fetchUpstreamBalance(p)
+	synced, balance, err := syncUpstreamPlatformBalanceRecord(c.Request.Context(), p)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{
+		"platform":    upstreamPlatformToDTO(synced),
+		"balance":     balance.Amount,
+		"currency":    balance.Currency,
+		"used_amount": balance.UsedAmount,
+		"raw":         balance.Raw,
+	})
+}
+
+const upstreamBalanceMonitorInterval = 10 * time.Second
+
+var upstreamBalanceMonitorRunning int32
+
+// StartUpstreamBalanceMonitor starts the background upstream balance sync loop.
+func StartUpstreamBalanceMonitor(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(upstreamBalanceMonitorInterval)
+		defer ticker.Stop()
+		log.Println("[upstream-balance] monitor started, interval =", upstreamBalanceMonitorInterval)
+		upstreamBalanceMonitorTick(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				upstreamBalanceMonitorTick(ctx)
+			}
+		}
+	}()
+}
+
+func upstreamBalanceMonitorTick(ctx context.Context) {
+	if !atomic.CompareAndSwapInt32(&upstreamBalanceMonitorRunning, 0, 1) {
+		return
+	}
+	defer atomic.StoreInt32(&upstreamBalanceMonitorRunning, 0)
+
+	var platforms []model.UpstreamPlatform
+	if err := db.Engine.Where("is_active = true").Find(&platforms); err != nil {
+		log.Printf("[upstream-balance] load platforms failed: %v", err)
+		return
+	}
+	for _, platform := range platforms {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if !supportsUpstreamBalance(platform.PlatformType) {
+			continue
+		}
+		if _, _, err := syncUpstreamPlatformBalanceRecord(ctx, platform); err != nil {
+			log.Printf("[upstream-balance] sync platform id=%d name=%q failed: %v", platform.ID, platform.Name, err)
+		}
+	}
+}
+
+const (
+	upstreamCostMonitorInterval = 10 * time.Second
+	upstreamCostAutoSyncKey     = "upstream_cost_auto_sync"
+)
+
+var upstreamCostMonitorRunning int32
+
+// StartUpstreamCostMonitor starts the background upstream cost sync loop.
+func StartUpstreamCostMonitor(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(upstreamCostMonitorInterval)
+		defer ticker.Stop()
+		log.Println("[upstream-cost] monitor started, interval =", upstreamCostMonitorInterval)
+		upstreamCostMonitorTick(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				upstreamCostMonitorTick(ctx)
+			}
+		}
+	}()
+}
+
+func upstreamCostMonitorTick(ctx context.Context) {
+	if !atomic.CompareAndSwapInt32(&upstreamCostMonitorRunning, 0, 1) {
+		return
+	}
+	defer atomic.StoreInt32(&upstreamCostMonitorRunning, 0)
+
+	var channels []model.Channel
+	if err := db.Engine.Where("is_active = true AND billing_config ->> 'upstream_cost_auto_sync' = 'true'").Find(&channels); err != nil {
+		log.Printf("[upstream-cost] load channels failed: %v", err)
+		return
+	}
+	lookupCache := map[string]upstreamCostLookup{}
+	for _, ch := range channels {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		changed, err := syncChannelUpstreamCostIfChanged(ctx, ch, lookupCache)
+		if err != nil {
+			log.Printf("[upstream-cost] sync channel id=%d name=%q failed: %v", ch.ID, ch.Name, err)
+			continue
+		}
+		if changed {
+			log.Printf("[upstream-cost] synced channel id=%d name=%q", ch.ID, ch.Name)
+		}
+	}
+}
+
+func syncUpstreamPlatformBalanceRecord(ctx context.Context, p model.UpstreamPlatform) (model.UpstreamPlatform, upstreamBalanceInfo, error) {
+	select {
+	case <-ctx.Done():
+		return p, upstreamBalanceInfo{}, ctx.Err()
+	default:
+	}
+
+	balance, err := fetchUpstreamBalance(p)
+	if err != nil {
+		return p, upstreamBalanceInfo{}, err
+	}
 	now := time.Now()
+	currency := strings.ToUpper(strings.TrimSpace(balance.Currency))
+	if currency == "" {
+		currency = "CNY"
+	}
+	balance.Currency = currency
+
 	patch := &model.UpstreamPlatform{
 		Balance:         balance.Credits,
 		BalanceAmount:   balance.Amount,
-		BalanceCurrency: balance.Currency,
+		BalanceCurrency: currency,
 		BalanceSyncedAt: &now,
 	}
 	cols := []string{"balance", "balance_amount", "balance_currency", "balance_synced_at"}
@@ -282,24 +421,55 @@ func SyncUpstreamPlatformBalance(c *gin.Context) {
 		patch.UpstreamGroup = balance.Group
 		cols = append(cols, "upstream_group")
 	}
-	if _, err := db.Engine.ID(p.ID).Cols(cols...).Update(patch); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+
+	threshold := p.BalanceAlertThreshold
+	low := threshold > 0 && balance.Amount <= threshold
+	if threshold <= 0 || !low {
+		patch.BalanceAlertNotified = false
+		patch.BalanceAlertNotifiedAt = nil
+		cols = append(cols, "balance_alert_notified", "balance_alert_notified_at")
 	}
+	if _, err := db.Engine.ID(p.ID).Cols(cols...).Update(patch); err != nil {
+		return p, upstreamBalanceInfo{}, err
+	}
+
 	p.Balance = balance.Credits
 	p.BalanceAmount = balance.Amount
-	p.BalanceCurrency = balance.Currency
+	p.BalanceCurrency = currency
 	p.BalanceSyncedAt = &now
 	if p.UpstreamGroup == "" {
 		p.UpstreamGroup = balance.Group
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"platform":    upstreamPlatformToDTO(p),
-		"balance":     balance.Amount,
-		"currency":    balance.Currency,
-		"used_amount": balance.UsedAmount,
-		"raw":         balance.Raw,
-	})
+	if threshold <= 0 || !low {
+		p.BalanceAlertNotified = false
+		p.BalanceAlertNotifiedAt = nil
+		return p, balance, nil
+	}
+	if p.BalanceAlertNotified {
+		return p, balance, nil
+	}
+
+	notifiedAt := now
+	affected, err := db.Engine.Where("id = ? AND balance_alert_notified = false", p.ID).
+		Cols("balance_alert_notified", "balance_alert_notified_at").
+		Update(&model.UpstreamPlatform{BalanceAlertNotified: true, BalanceAlertNotifiedAt: &notifiedAt})
+	if err != nil {
+		log.Printf("[upstream-balance] mark notified failed platform id=%d: %v", p.ID, err)
+		return p, balance, nil
+	}
+	if affected <= 0 {
+		return p, balance, nil
+	}
+	if err := notify.SendLarkUpstreamBalanceLow(p.Name, p.ID, balance.Amount, currency, threshold, now); err != nil {
+		log.Printf("[upstream-balance] lark notify failed platform id=%d: %v", p.ID, err)
+		db.Engine.Where("id = ?", p.ID).
+			Cols("balance_alert_notified", "balance_alert_notified_at").
+			Update(&model.UpstreamPlatform{BalanceAlertNotified: false}) //nolint:errcheck
+		return p, balance, nil
+	}
+	p.BalanceAlertNotified = true
+	p.BalanceAlertNotifiedAt = &notifiedAt
+	return p, balance, nil
 }
 
 // POST /admin/upstream-platforms/:id/api-keys
@@ -590,10 +760,24 @@ func upstreamPlatformFromPayload(req upstreamPlatformPayload, existing *model.Up
 		p.BalanceAmount = existing.BalanceAmount
 		p.BalanceCurrency = existing.BalanceCurrency
 		p.BalanceSyncedAt = existing.BalanceSyncedAt
+		p.BalanceAlertThreshold = existing.BalanceAlertThreshold
+		p.BalanceAlertNotified = existing.BalanceAlertNotified
+		p.BalanceAlertNotifiedAt = existing.BalanceAlertNotifiedAt
 		p.IsActive = existing.IsActive
 	}
 	if req.IsActive != nil {
 		p.IsActive = *req.IsActive
+	}
+	if req.BalanceAlertThreshold != nil {
+		threshold := *req.BalanceAlertThreshold
+		if threshold < 0 {
+			return nil, errors.New("余额告警阈值不能小于 0")
+		}
+		p.BalanceAlertThreshold = threshold
+		if existing == nil || threshold != existing.BalanceAlertThreshold {
+			p.BalanceAlertNotified = false
+			p.BalanceAlertNotifiedAt = nil
+		}
 	}
 	if strings.TrimSpace(req.APIKey) != "" {
 		p.APIKeyEnc = strings.TrimSpace(req.APIKey)
@@ -1447,6 +1631,178 @@ func syncChannelUpstreamCost(ctx context.Context, ch model.Channel, req channelU
 	}, ch, nil
 }
 
+type upstreamCostLookup struct {
+	platform model.UpstreamPlatform
+	infos    map[string]upstreamModelInfo
+}
+
+func syncChannelUpstreamCostIfChanged(ctx context.Context, ch model.Channel, cache map[string]upstreamCostLookup) (bool, error) {
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	default:
+	}
+	if ch.BillingConfig == nil || !jsonBool(ch.BillingConfig[upstreamCostAutoSyncKey]) {
+		return false, nil
+	}
+	req, err := channelUpstreamCostPayloadFromConfig(ch)
+	if err != nil {
+		return false, err
+	}
+	p, info, modelName, found, err := resolveChannelUpstreamCostCached(ch, req, cache)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("upstream model not found: %s", modelName)
+	}
+
+	next := ch
+	applyUpstreamBindingUpdate(&next, p, info, normalizeMarkup(req.Markup), true)
+	if !channelUpstreamCostChanged(ch, next) {
+		return false, nil
+	}
+	if err := service.UpdateChannel(ctx, &next); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func resolveChannelUpstreamCostCached(ch model.Channel, req channelUpstreamCostPayload, cache map[string]upstreamCostLookup) (model.UpstreamPlatform, upstreamModelInfo, string, bool, error) {
+	group := strings.TrimSpace(req.Group)
+	cacheKey := fmt.Sprintf("%d:%s", req.PlatformID, group)
+	lookup, ok := cache[cacheKey]
+	if !ok {
+		p, err := loadUpstreamPlatformByID(req.PlatformID)
+		if err != nil {
+			return p, upstreamModelInfo{}, "", false, err
+		}
+		p.UpstreamGroup = group
+		infos, err := fetchUpstreamModelInfos(p)
+		if err != nil {
+			return p, upstreamModelInfo{}, "", false, err
+		}
+		lookup = upstreamCostLookup{
+			platform: p,
+			infos:    buildUpstreamInfoLookup(infos),
+		}
+		cache[cacheKey] = lookup
+	}
+
+	modelName := resolveChannelUpstreamModel(ch, req.Model)
+	info, found := lookupUpstreamInfo(lookup.infos, modelName)
+	return lookup.platform, info, modelName, found, nil
+}
+
+func channelUpstreamCostPayloadFromConfig(ch model.Channel) (channelUpstreamCostPayload, error) {
+	cfg := ch.BillingConfig
+	platformID := jsonInt64(cfg["upstream_platform_id"])
+	if platformID <= 0 {
+		return channelUpstreamCostPayload{}, errors.New("channel is not bound to an upstream platform")
+	}
+	modelName := resolveChannelUpstreamModel(ch, "")
+	if modelName == "" {
+		return channelUpstreamCostPayload{}, errors.New("channel upstream model is not configured")
+	}
+	return channelUpstreamCostPayload{
+		PlatformID: platformID,
+		Model:      modelName,
+		Group:      jsonString(cfg["upstream_group"]),
+		Markup:     inferChannelUpstreamMarkup(cfg),
+	}, nil
+}
+
+func inferChannelUpstreamMarkup(cfg model.JSON) float64 {
+	if markup := toFloat64(cfg["price_markup"]); markup > 0 {
+		return markup
+	}
+	for _, pair := range []struct {
+		costKey  string
+		priceKey string
+	}{
+		{"input_cost_per_1m_tokens", "input_price_per_1m_tokens"},
+		{"output_cost_per_1m_tokens", "output_price_per_1m_tokens"},
+		{"cache_creation_cost_per_1m_tokens", "cache_creation_price_per_1m_tokens"},
+		{"cache_read_cost_per_1m_tokens", "cache_read_price_per_1m_tokens"},
+		{"base_cost", "base_price"},
+		{"default_size_cost", "default_size_price"},
+		{"cost_per_second", "price_per_second"},
+		{"cost_per_call", "price_per_call"},
+	} {
+		if ratio := priceCostRatio(cfg[pair.priceKey], cfg[pair.costKey]); ratio > 0 {
+			return ratio
+		}
+	}
+	if ratio := firstSizePriceCostRatio(cfg); ratio > 0 {
+		return ratio
+	}
+	return 1
+}
+
+func priceCostRatio(priceValue interface{}, costValue interface{}) float64 {
+	price := toFloat64(priceValue)
+	cost := toFloat64(costValue)
+	if price <= 0 || cost <= 0 {
+		return 0
+	}
+	return price / cost
+}
+
+func firstSizePriceCostRatio(cfg model.JSON) float64 {
+	prices, pricesOK := jsonObject(cfg["size_prices"])
+	costs, costsOK := jsonObject(cfg["size_costs"])
+	if !pricesOK || !costsOK {
+		return 0
+	}
+	for _, tier := range []string{"1k", "2k", "3k", "4k"} {
+		if ratio := priceCostRatio(prices[tier], costs[tier]); ratio > 0 {
+			return ratio
+		}
+	}
+	for tier, price := range prices {
+		if ratio := priceCostRatio(price, costs[tier]); ratio > 0 {
+			return ratio
+		}
+	}
+	return 0
+}
+
+var upstreamCostCompareKeys = []string{
+	"input_cost_per_1m_tokens",
+	"output_cost_per_1m_tokens",
+	"cache_creation_cost_per_1m_tokens",
+	"cache_read_cost_per_1m_tokens",
+	"input_price_per_1m_tokens",
+	"output_price_per_1m_tokens",
+	"cache_creation_price_per_1m_tokens",
+	"cache_read_price_per_1m_tokens",
+	"base_cost",
+	"base_price",
+	"size_costs",
+	"size_prices",
+	"default_size_cost",
+	"default_size_price",
+	"cost_per_second",
+	"price_per_second",
+	"cost_per_call",
+	"price_per_call",
+	"input_from_response",
+	"price_markup",
+	"price_unavailable",
+}
+
+func channelUpstreamCostChanged(current, next model.Channel) bool {
+	if current.BillingType != next.BillingType {
+		return true
+	}
+	for _, key := range upstreamCostCompareKeys {
+		if !jsonValueEqual(current.BillingConfig[key], next.BillingConfig[key]) {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveChannelUpstreamCost(ch model.Channel, req channelUpstreamCostPayload) (model.UpstreamPlatform, upstreamModelInfo, string, bool, error) {
 	p, err := loadUpstreamPlatformByID(req.PlatformID)
 	if err != nil {
@@ -1828,6 +2184,15 @@ func isNewAPI(raw string) bool {
 	return normalizeUpstreamType(raw) == upstreamTypeNewAPI
 }
 
+func supportsUpstreamBalance(raw string) bool {
+	switch normalizeUpstreamType(raw) {
+	case upstreamTypeNewAPI, upstreamTypeSub2API:
+		return true
+	default:
+		return false
+	}
+}
+
 func containsString(items []string, target string) bool {
 	for _, item := range items {
 		if item == target {
@@ -1858,6 +2223,100 @@ func jsonInt64(v interface{}) int64 {
 	default:
 		return 0
 	}
+}
+
+func jsonBool(v interface{}) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "1", "yes", "on":
+			return true
+		default:
+			return false
+		}
+	case int:
+		return value != 0
+	case int64:
+		return value != 0
+	case float64:
+		return value != 0
+	case json.Number:
+		i, _ := value.Int64()
+		return i != 0
+	default:
+		return false
+	}
+}
+
+func jsonString(v interface{}) string {
+	switch value := v.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func jsonObject(v interface{}) (map[string]interface{}, bool) {
+	switch value := v.(type) {
+	case model.JSON:
+		return map[string]interface{}(value), true
+	case map[string]interface{}:
+		return value, true
+	default:
+		return nil, false
+	}
+}
+
+func jsonValueEqual(left interface{}, right interface{}) bool {
+	leftBytes, leftErr := json.Marshal(normalizeJSONValue(left))
+	rightBytes, rightErr := json.Marshal(normalizeJSONValue(right))
+	if leftErr != nil || rightErr != nil {
+		return fmt.Sprint(left) == fmt.Sprint(right)
+	}
+	return bytes.Equal(leftBytes, rightBytes)
+}
+
+func normalizeJSONValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case model.JSON:
+		return normalizeJSONMap(map[string]interface{}(v))
+	case map[string]interface{}:
+		return normalizeJSONMap(v)
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, item := range v {
+			out[i] = normalizeJSONValue(item)
+		}
+		return out
+	case int:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case float32:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
+		return string(v)
+	default:
+		return v
+	}
+}
+
+func normalizeJSONMap(src map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(src))
+	for key, value := range src {
+		out[key] = normalizeJSONValue(value)
+	}
+	return out
 }
 
 func toFloat64(v interface{}) float64 {

@@ -73,6 +73,10 @@ func main() {
 	taskresult.StartBatchWriter(ctx)
 	taskresult.StartPoller(ctx)
 
+	// 启动上游余额自动同步与低余额告警（每 10 秒）
+	handler.StartUpstreamBalanceMonitor(ctx)
+	handler.StartUpstreamCostMonitor(ctx)
+
 	// 启动 OCPC 定时上报调度器
 	service.StartOcpcScheduler(ctx)
 

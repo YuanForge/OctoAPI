@@ -359,6 +359,9 @@ export type AdminUpstreamPlatform = {
   balance_amount?: number
   balance_currency?: string
   balance_synced_at?: string
+  balance_alert_threshold?: number
+  balance_alert_notified?: boolean
+  balance_alert_notified_at?: string
   is_active?: boolean
   has_api_key?: boolean
   has_system_token?: boolean
