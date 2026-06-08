@@ -39,6 +39,8 @@ func UserFacingErrorMessage(msg string) string {
 		"no such host",
 		"connection refused",
 		"connection reset",
+		"malformed http response",
+		"transport connection broken",
 		"tls handshake",
 		"retry publish failed",
 		"unexpected eof",

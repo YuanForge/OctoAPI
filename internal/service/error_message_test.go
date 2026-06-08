@@ -16,6 +16,13 @@ func TestUserFacingErrorMessageHidesConnectionResetDetails(t *testing.T) {
 	}
 }
 
+func TestUserFacingErrorMessageHidesMalformedHTTPResponseDetails(t *testing.T) {
+	msg := `upstream error: Post "https://api.chatfire.cn/v1/images/generations": net/http: HTTP/1.x transport connection broken: malformed HTTP response "\x00\x00\x12\x04"`
+	if got := UserFacingErrorMessage(msg); got != genericUpstreamErrorMessage {
+		t.Fatalf("expected generic upstream message, got %q", got)
+	}
+}
+
 func TestUserFacingErrorMessageKeepsBusinessMessage(t *testing.T) {
 	msg := "余额不足"
 	if got := UserFacingErrorMessage(msg); got != msg {

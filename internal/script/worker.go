@@ -29,10 +29,10 @@ const maxUpstreamNetworkAttempts = 2
 
 var upstreamHTTPTransport = func() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	// 部分 OpenAI 兼容图片上游会在复用连接或 HTTP/2 链路上直接 reset。
-	// Worker 请求通常是长耗时媒体生成，优先选择每次新建 HTTP/1.1 连接来换稳定性。
+	// 部分 OpenAI 兼容图片上游会在复用连接时直接 reset。
+	// Worker 请求通常是长耗时媒体生成，禁用空闲连接复用，但保留 HTTP/2 协商。
 	tr.DisableKeepAlives = true
-	tr.ForceAttemptHTTP2 = false
+	tr.ForceAttemptHTTP2 = true
 	return tr
 }()
 
