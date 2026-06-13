@@ -211,6 +211,8 @@ func main() {
 			admin.GET("/transactions", handler.ListAllTransactions)
 			admin.GET("/tasks", handler.ListTasks)
 			admin.GET("/tasks/:id", handler.GetAdminTask)
+			admin.GET("/cleanup/preview", handler.AdminPreviewCleanup)
+			admin.POST("/cleanup/run", handler.AdminRunCleanup)
 			admin.GET("/stats", handler.GetAdminStats)
 			admin.GET("/stats/trend", handler.GetAdminStatsTrend)
 			admin.GET("/stats/top", handler.GetAdminStatsTop)

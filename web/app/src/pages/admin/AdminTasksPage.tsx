@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { ListIcon } from 'lucide-react'
+import { ListIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 
 import { DateRangeFilter } from '@/components/shared/DateRangeFilter'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { TableEmpty } from '@/components/shared/TableEmpty'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -31,7 +40,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { adminApi, type AdminTask } from '@/lib/api/admin'
+import { adminApi, type AdminCleanupPreview, type AdminCleanupRunResult, type AdminCleanupTarget, type AdminMe, type AdminTask } from '@/lib/api/admin'
+import { getApiErrorMessage } from '@/lib/api/http'
 import { useAsync } from '@/hooks/use-async'
 
 function statusBadge(s: string | undefined) {
@@ -54,6 +64,26 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
   )
 }
 
+function cleanupTargetLabel(target: AdminCleanupTarget) {
+  return target === 'tasks' ? '历史任务' : 'LLM 调用日志'
+}
+
+function cleanupStatusText(status: string) {
+  const labels: Record<string, string> = {
+    done: '成功',
+    failed: '失败',
+    ok: '成功',
+    error: '错误',
+    refunded: '已退款',
+  }
+  return labels[status] ?? status
+}
+
+function formatDateTime(value: string | undefined) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN')
+}
+
 export function AdminTasksPage() {
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState({ task_id: '', user_id: '', type: '', status: '' })
@@ -68,6 +98,14 @@ export function AdminTasksPage() {
     return { tasks, total }
   }, { tasks: [] as AdminTask[], total: 0 }, [queryParams])
 
+  const { data: me } = useAsync<AdminMe | null>(
+    () => adminApi.getAdminMe(),
+    null,
+    [],
+  )
+  const permissions = me?.permissions ?? []
+  const canCleanup = permissions.includes('*') || permissions.includes('tasks:write')
+
   const pageSize = 20
   const totalPages = Math.ceil(data.total / pageSize)
 
@@ -75,6 +113,16 @@ export function AdminTasksPage() {
   const [detail, setDetail] = useState<AdminTask | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const [cleanupTarget, setCleanupTarget] = useState<AdminCleanupTarget>('tasks')
+  const [cleanupRetentionDays, setCleanupRetentionDays] = useState('90')
+  const [cleanupPreview, setCleanupPreview] = useState<AdminCleanupPreview | null>(null)
+  const [cleanupResult, setCleanupResult] = useState<AdminCleanupRunResult | null>(null)
+  const [cleanupError, setCleanupError] = useState('')
+  const [cleanupLoading, setCleanupLoading] = useState(false)
+  const [cleanupRunning, setCleanupRunning] = useState(false)
+  const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false)
+  const [cleanupConfirm, setCleanupConfirm] = useState('')
 
   function stopAutoRefresh() {
     if (autoRefreshRef.current) { clearInterval(autoRefreshRef.current); autoRefreshRef.current = null }
@@ -129,6 +177,84 @@ export function AdminTasksPage() {
   function changePage(next: number) {
     setPage(next)
     setQueryParams((prev) => ({ ...prev, page: next }))
+  }
+
+  function cleanupRetentionValue() {
+    return Number.parseInt(cleanupRetentionDays, 10)
+  }
+
+  function cleanupRetentionValid() {
+    const days = cleanupRetentionValue()
+    return Number.isInteger(days) && days >= 30
+  }
+
+  function resetCleanupOutput() {
+    setCleanupPreview(null)
+    setCleanupResult(null)
+    setCleanupError('')
+  }
+
+  const parsedCleanupRetention = cleanupRetentionValue()
+  const previewIsCurrent = cleanupPreview?.target === cleanupTarget && cleanupPreview?.retention_days === parsedCleanupRetention
+
+  async function previewCleanup() {
+    if (!cleanupRetentionValid()) {
+      setCleanupError('保留天数不能少于 30 天')
+      return
+    }
+    setCleanupLoading(true)
+    setCleanupError('')
+    setCleanupResult(null)
+    try {
+      const res = await adminApi.previewCleanup({
+        target: cleanupTarget,
+        retention_days: parsedCleanupRetention,
+      })
+      setCleanupPreview(res)
+    } catch (err) {
+      setCleanupPreview(null)
+      setCleanupError(getApiErrorMessage(err))
+    } finally {
+      setCleanupLoading(false)
+    }
+  }
+
+  function openCleanupDialog() {
+    if (!previewIsCurrent) {
+      setCleanupError('请先按当前条件预估清理数量')
+      return
+    }
+    setCleanupConfirm('')
+    setCleanupDialogOpen(true)
+  }
+
+  async function runCleanup() {
+    if (!previewIsCurrent || cleanupConfirm.trim() !== '确认清理') return
+    setCleanupRunning(true)
+    setCleanupError('')
+    try {
+      const res = await adminApi.runCleanup({
+        target: cleanupTarget,
+        retention_days: parsedCleanupRetention,
+        confirm: cleanupConfirm,
+      })
+      setCleanupResult(res)
+      setCleanupPreview({
+        target: res.target,
+        target_label: res.target_label,
+        retention_days: res.retention_days,
+        cutoff: res.cutoff,
+        count: res.remaining,
+        statuses: res.statuses,
+      })
+      setCleanupDialogOpen(false)
+      setCleanupConfirm('')
+      if (res.target === 'tasks') reload()
+    } catch (err) {
+      setCleanupError(getApiErrorMessage(err))
+    } finally {
+      setCleanupRunning(false)
+    }
   }
 
   const upstreamURL = (req?: Record<string, unknown>) => req?._url as string | undefined
@@ -234,6 +360,107 @@ export function AdminTasksPage() {
           </div>
         )
       })() : null}
+
+      {canCleanup ? (
+        <Card>
+          <CardContent className="space-y-4 py-4">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Trash2Icon className="size-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold">数据清理</h2>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  只清理已结束且早于保留期限的数据；进行中任务、账单流水不会被删除。
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">清理类型</label>
+                  <Select
+                    value={cleanupTarget}
+                    onValueChange={(v) => {
+                      setCleanupTarget(v as AdminCleanupTarget)
+                      resetCleanupOutput()
+                    }}
+                  >
+                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="tasks">历史任务</SelectItem>
+                      <SelectItem value="llm_logs">LLM 调用日志</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">保留天数</label>
+                  <Input
+                    className="w-28"
+                    min={30}
+                    type="number"
+                    value={cleanupRetentionDays}
+                    onChange={(e) => {
+                      setCleanupRetentionDays(e.target.value)
+                      resetCleanupOutput()
+                    }}
+                  />
+                </div>
+                <Button variant="outline" onClick={previewCleanup} disabled={cleanupLoading || !cleanupRetentionValid()}>
+                  <RefreshCwIcon className={`mr-1 size-3.5 ${cleanupLoading ? 'animate-spin' : ''}`} />
+                  预估清理
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={openCleanupDialog}
+                  disabled={!previewIsCurrent || cleanupLoading || (cleanupPreview?.count ?? 0) <= 0}
+                >
+                  <Trash2Icon className="mr-1 size-3.5" />
+                  执行清理
+                </Button>
+              </div>
+            </div>
+
+            {cleanupError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{cleanupError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {cleanupPreview ? (
+              <div className="grid gap-3 text-sm md:grid-cols-4">
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground">预计可清理</p>
+                  <p className="mt-1 text-2xl font-semibold">{cleanupPreview.count.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground">清理类型</p>
+                  <p className="mt-2 font-medium">{cleanupPreview.target_label || cleanupTargetLabel(cleanupPreview.target)}</p>
+                </div>
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground">早于时间</p>
+                  <p className="mt-2 font-medium">{formatDateTime(cleanupPreview.cutoff)}</p>
+                </div>
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground">允许状态</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {cleanupPreview.statuses.map((s) => (
+                      <Badge key={s} variant="outline">{cleanupStatusText(s)}</Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {cleanupResult ? (
+              <Alert variant={cleanupResult.has_more ? 'warning' : 'success'}>
+                <AlertDescription>
+                  已删除 {cleanupResult.deleted.toLocaleString()} 条，剩余 {cleanupResult.remaining.toLocaleString()} 条
+                  {cleanupResult.has_more ? '；单次最多清理 50000 条，可再次执行。' : '。'}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* 过滤栏 */}
       <Card>
@@ -423,6 +650,42 @@ export function AdminTasksPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={cleanupDialogOpen} onOpenChange={(open) => {
+        if (!cleanupRunning) setCleanupDialogOpen(open)
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认清理数据</AlertDialogTitle>
+            <AlertDialogDescription>
+              将物理删除 {cleanupPreview?.target_label ?? cleanupTargetLabel(cleanupTarget)}
+              中早于 {formatDateTime(cleanupPreview?.cutoff)} 的 {cleanupPreview?.count.toLocaleString() ?? 0} 条记录。
+              此操作不会删除进行中数据和账单流水，但删除后无法恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground">输入“确认清理”后执行</label>
+            <Input
+              autoFocus
+              value={cleanupConfirm}
+              onChange={(e) => setCleanupConfirm(e.target.value)}
+              placeholder="确认清理"
+              disabled={cleanupRunning}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cleanupRunning}>取消</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={runCleanup}
+              disabled={cleanupRunning || cleanupConfirm.trim() !== '确认清理'}
+            >
+              <Trash2Icon className="mr-1 size-3.5" />
+              {cleanupRunning ? '清理中…' : '确认清理'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

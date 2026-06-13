@@ -142,6 +142,28 @@ export type AdminTask = {
   updated_at?: string
 }
 
+export type AdminCleanupTarget = 'tasks' | 'llm_logs'
+
+export type AdminCleanupBase = {
+  target: AdminCleanupTarget
+  target_label: string
+  retention_days: number
+  cutoff: string
+  statuses: string[]
+}
+
+export type AdminCleanupPreview = AdminCleanupBase & {
+  count: number
+}
+
+export type AdminCleanupRunResult = AdminCleanupBase & {
+  ok: boolean
+  matched: number
+  deleted: number
+  remaining: number
+  has_more: boolean
+}
+
 export type AdminLog = {
   id?: number
   user_id?: number
@@ -597,6 +619,10 @@ export const adminApi = {
     ),
   getAdminTask: (id: number) =>
     http.get<{ task?: AdminTask } | AdminTask>(`/admin/tasks/${id}`),
+  previewCleanup: (params: { target: AdminCleanupTarget; retention_days: number }) =>
+    http.get<AdminCleanupPreview>('/admin/cleanup/preview', { params }),
+  runCleanup: (payload: { target: AdminCleanupTarget; retention_days: number; confirm: string }) =>
+    http.post<AdminCleanupRunResult>('/admin/cleanup/run', payload),
   listLogs: (params: Record<string, unknown> = {}) =>
     http.get<{ logs?: AdminLog[]; items?: AdminLog[]; total?: number }>('/admin/llm-logs', { params }),
   getLog: (id: number) =>
