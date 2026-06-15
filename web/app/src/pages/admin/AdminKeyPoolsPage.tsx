@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PlusCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { RefreshCwIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/shared/PageHeader'
@@ -274,12 +274,12 @@ export function AdminKeyPoolsPage() {
     return parts.join('，')
   }
 
-  async function syncUpstreamKeys(pool: AdminKeyPool, ensure = false) {
+  async function syncUpstreamKeys(pool: AdminKeyPool) {
     if (!pool.id) return
     setMutError('')
     setSyncingPoolId(pool.id)
     try {
-      const result = await adminApi.syncKeyPoolFromUpstream(pool.id, ensure)
+      const result = await adminApi.syncKeyPoolFromUpstream(pool.id)
       toast.success(`上游 Key 已同步：${formatSyncResult(result)}`)
       reload()
       if (keyOpen && activePool?.id === pool.id) {
@@ -367,10 +367,6 @@ export function AdminKeyPoolsPage() {
                           <RefreshCwIcon className={`mr-1 h-3.5 w-3.5 ${syncingPoolId === pool.id ? 'animate-spin' : ''}`} />
                           {syncingPoolId === pool.id ? '同步中' : '同步上游'}
                         </Button>
-                        <Button size="sm" variant="outline" disabled={syncingPoolId === pool.id} onClick={() => syncUpstreamKeys(pool, true)}>
-                          <PlusCircleIcon className="mr-1 h-3.5 w-3.5" />
-                          补新 Key
-                        </Button>
                         <Button size="sm" variant="outline" onClick={() => togglePool(pool)}>
                           {pool.is_active ? '停用' : '启用'}
                         </Button>
@@ -421,10 +417,6 @@ export function AdminKeyPoolsPage() {
                 <Button variant="outline" disabled={syncingPoolId === activePool.id} onClick={() => syncUpstreamKeys(activePool)}>
                   <RefreshCwIcon className={`mr-1 h-4 w-4 ${syncingPoolId === activePool.id ? 'animate-spin' : ''}`} />
                   {syncingPoolId === activePool.id ? '同步中' : '同步上游'}
-                </Button>
-                <Button variant="outline" disabled={syncingPoolId === activePool.id} onClick={() => syncUpstreamKeys(activePool, true)}>
-                  <PlusCircleIcon className="mr-1 h-4 w-4" />
-                  补新 Key
                 </Button>
               </>
             ) : null}

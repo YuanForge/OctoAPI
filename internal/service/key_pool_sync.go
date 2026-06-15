@@ -18,11 +18,9 @@ import (
 )
 
 const (
-	keyPoolSyncLockFmt           = "pool:sync_lock:%d"
-	keyPoolSyncCreateCooldownFmt = "pool:sync_created:%d"
-	keyPoolSyncCreateCooldown    = time.Minute
-	newAPITokenPageSize          = 100
-	newAPITokenMaxPages          = 5
+	keyPoolSyncLockFmt  = "pool:sync_lock:%d"
+	newAPITokenPageSize = 100
+	newAPITokenMaxPages = 5
 )
 
 var keyPoolHTTPClient = &http.Client{Timeout: 15 * time.Second}
@@ -55,17 +53,16 @@ type newAPITokenRecord struct {
 }
 
 // SyncKeyPoolFromUpstream imports active New API tokens into the local pool.
-// It does not create upstream tokens; allocation paths call EnsureKeyPoolFromUpstream
-// when they need a fresh key immediately.
+// It does not create upstream tokens.
 func SyncKeyPoolFromUpstream(ctx context.Context, poolID int64) (KeyPoolSyncResult, error) {
-	return syncKeyPoolFromUpstream(ctx, poolID, false)
+	return syncKeyPoolFromUpstream(ctx, poolID)
 }
 
 func EnsureKeyPoolFromUpstream(ctx context.Context, poolID int64) (KeyPoolSyncResult, error) {
-	return syncKeyPoolFromUpstream(ctx, poolID, true)
+	return syncKeyPoolFromUpstream(ctx, poolID)
 }
 
-func syncKeyPoolFromUpstream(ctx context.Context, poolID int64, ensureFresh bool) (KeyPoolSyncResult, error) {
+func syncKeyPoolFromUpstream(ctx context.Context, poolID int64) (KeyPoolSyncResult, error) {
 	lockKey := fmt.Sprintf(keyPoolSyncLockFmt, poolID)
 	locked := false
 	if cache.Client != nil {
@@ -126,49 +123,7 @@ func syncKeyPoolFromUpstream(ctx context.Context, poolID int64, ensureFresh bool
 		}
 	}
 
-	if ensureFresh && result.Imported == 0 && result.Reactivated == 0 {
-		if !reservePoolKeyCreation(ctx, poolID) {
-			return result, nil
-		}
-		name := fmt.Sprintf("fanapi-pool-%d-%d", poolID, time.Now().Unix())
-		key, err := createNewAPIKey(ctx, cfg.Platform, name, cfg.Group)
-		if err != nil {
-			releasePoolKeyCreation(poolID)
-			return result, err
-		}
-		created, reactivated, err := upsertSyncedPoolKey(ctx, poolID, key)
-		if err != nil {
-			releasePoolKeyCreation(poolID)
-			return result, err
-		}
-		if created {
-			result.Imported++
-		}
-		if reactivated {
-			result.Reactivated++
-		}
-		result.CreatedUpstream = 1
-		result.CreatedUpstreamKey = key
-	}
-
 	return result, nil
-}
-
-func reservePoolKeyCreation(ctx context.Context, poolID int64) bool {
-	if cache.Client == nil {
-		return true
-	}
-	key := fmt.Sprintf(keyPoolSyncCreateCooldownFmt, poolID)
-	ok, err := cache.Client.SetNX(ctx, key, 1, keyPoolSyncCreateCooldown).Result()
-	return err != nil || ok
-}
-
-func releasePoolKeyCreation(poolID int64) {
-	if cache.Client == nil {
-		return
-	}
-	key := fmt.Sprintf(keyPoolSyncCreateCooldownFmt, poolID)
-	cache.Client.Del(context.Background(), key)
 }
 
 func resolveKeyPoolSyncConfig(ctx context.Context, poolID int64) (keyPoolSyncConfig, error) {

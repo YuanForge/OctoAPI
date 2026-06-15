@@ -226,13 +226,7 @@ func SyncKeyPoolFromUpstream(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "号池 ID 格式错误"})
 		return
 	}
-	ensure := c.Query("ensure") == "1" || strings.EqualFold(c.Query("ensure"), "true")
-	var result service.KeyPoolSyncResult
-	if ensure {
-		result, err = service.EnsureKeyPoolFromUpstream(c.Request.Context(), poolID)
-	} else {
-		result, err = service.SyncKeyPoolFromUpstream(c.Request.Context(), poolID)
-	}
+	result, err := service.SyncKeyPoolFromUpstream(c.Request.Context(), poolID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "result": result})
 		return
