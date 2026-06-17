@@ -3,24 +3,33 @@ package billing
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 
 	"fanapi/internal/cache"
 	"fanapi/internal/db"
-
-	"github.com/redis/go-redis/v9"
 )
 
 const modelCreditKeyFmt = "user:model_credit:%d:%s"
+const modelCreditLockNamespace int64 = 20260619
 
 func modelCreditKey(userID int64, modelName string) string {
 	return fmt.Sprintf(modelCreditKeyFmt, userID, modelName)
+}
+
+func modelCreditLockID(userID int64, modelName string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strconv.FormatInt(userID, 10)))
+	_, _ = h.Write([]byte(":"))
+	_, _ = h.Write([]byte(modelName))
+	return int64(h.Sum64())
 }
 
 // SyncModelCreditToRedis 将 DB 中的模型专属积分同步到 Redis。
 func SyncModelCreditToRedis(ctx context.Context, userID int64, modelName string) (int64, error) {
 	var result struct{ Credits int64 }
 	found, err := db.Engine.SQL(
-		"SELECT credits FROM user_model_credits WHERE user_id = ? AND model_name = ?",
+		"SELECT COALESCE(SUM(credits), 0) AS credits FROM user_model_credits WHERE user_id = ? AND model_name = ?",
 		userID, modelName,
 	).Get(&result)
 	if err != nil {
@@ -44,14 +53,6 @@ func GetModelCredit(ctx context.Context, userID int64, modelName string) (int64,
 	return SyncModelCreditToRedis(ctx, userID, modelName)
 }
 
-// luaChargeModel 原子地扣减模型积分，余额不足时返回 -1，键不存在时返回 -2。
-var luaChargeModel = redis.NewScript(`
-local bal = tonumber(redis.call("GET", KEYS[1]))
-if not bal then return -2 end
-if bal < tonumber(ARGV[1]) then return -1 end
-return redis.call("DECRBY", KEYS[1], ARGV[1])
-`)
-
 // ChargeModelCredit 优先扣减用户的模型专属积分，返回实际扣减量。
 // 若模型积分不足以覆盖全部 credits，则全额扣减模型积分余额并返回实际扣减量，
 // 剩余部分由调用方继续从通用余额扣除。
@@ -60,57 +61,54 @@ func ChargeModelCredit(ctx context.Context, userID int64, modelName string, cred
 	if credits <= 0 {
 		return 0, nil
 	}
-	key := modelCreditKey(userID, modelName)
-
-	// 确保 Redis 键存在
-	existing, getErr := cache.Client.Get(ctx, key).Int64()
-	if getErr != nil {
-		existing, err = SyncModelCreditToRedis(ctx, userID, modelName)
-		if err != nil {
-			return 0, err
-		}
-	}
-	if existing <= 0 {
-		return 0, nil
-	}
-
-	// 实际能扣的量：min(existing, credits)
-	toCharge := credits
-	if existing < credits {
-		toCharge = existing
-	}
-
-	result, err := luaChargeModel.Run(ctx, cache.Client, []string{key}, toCharge).Int64()
-	if err != nil {
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
 		return 0, err
 	}
-	if result == -2 {
-		// 键消失了（极罕见），重试一次
-		existing, _ = SyncModelCreditToRedis(ctx, userID, modelName)
-		if existing <= 0 {
-			return 0, nil
+	if _, err := sess.Exec("SELECT pg_advisory_xact_lock($1)", modelCreditLockID(userID, modelName)); err != nil {
+		_ = sess.Rollback()
+		return 0, err
+	}
+	rows, err := sess.QueryString(`
+SELECT id, credits
+FROM user_model_credits
+WHERE user_id = $1 AND model_name = $2 AND credits > 0
+ORDER BY id
+FOR UPDATE`, userID, modelName)
+	if err != nil {
+		_ = sess.Rollback()
+		return 0, err
+	}
+	remaining := credits
+	for _, row := range rows {
+		if remaining <= 0 {
+			break
 		}
-		toCharge = credits
-		if existing < credits {
-			toCharge = existing
+		id, _ := strconv.ParseInt(row["id"], 10, 64)
+		available, _ := strconv.ParseInt(row["credits"], 10, 64)
+		if id <= 0 || available <= 0 {
+			continue
 		}
-		result, err = luaChargeModel.Run(ctx, cache.Client, []string{key}, toCharge).Int64()
-		if err != nil || result < 0 {
+		toCharge := available
+		if toCharge > remaining {
+			toCharge = remaining
+		}
+		if _, err := sess.Exec(
+			"UPDATE user_model_credits SET credits = credits - $1, updated_at = NOW() WHERE id = $2 AND credits >= $1",
+			toCharge, id,
+		); err != nil {
+			_ = sess.Rollback()
 			return 0, err
 		}
+		charged += toCharge
+		remaining -= toCharge
 	}
-	if result == -1 {
-		// 并发下被其他请求耗尽，退化到 0
-		return 0, nil
+	if err := sess.Commit(); err != nil {
+		return 0, err
 	}
-	// 同步 DB（非关键路径，异步执行）
-	go func() {
-		db.Engine.Exec(
-			"UPDATE user_model_credits SET credits = GREATEST(0, credits - $1), updated_at = NOW() WHERE user_id = $2 AND model_name = $3",
-			toCharge, userID, modelName,
-		)
-	}()
-	return toCharge, nil
+	_, _ = SyncModelCreditToRedis(ctx, userID, modelName)
+	return charged, nil
 }
 
 // RefundModelCredit 退回模型专属积分（用于退款场景）。
@@ -118,23 +116,49 @@ func RefundModelCredit(ctx context.Context, userID int64, modelName string, cred
 	if credits <= 0 {
 		return nil
 	}
-	key := modelCreditKey(userID, modelName)
-	// 确保键存在再 IncrBy
-	if _, err := cache.Client.Get(ctx, key).Int64(); err != nil {
-		if _, syncErr := SyncModelCreditToRedis(ctx, userID, modelName); syncErr != nil {
-			return syncErr
-		}
-	}
-	if err := cache.Client.IncrBy(ctx, key, credits).Err(); err != nil {
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
 		return err
 	}
-	go func() {
-		db.Engine.Exec(
-			"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE user_id = $2 AND model_name = $3",
-			credits, userID, modelName,
-		)
-	}()
-	return nil
+	if _, err := sess.Exec("SELECT pg_advisory_xact_lock($1)", modelCreditLockID(userID, modelName)); err != nil {
+		_ = sess.Rollback()
+		return err
+	}
+	rows, err := sess.QueryString(`
+SELECT id
+FROM user_model_credits
+WHERE user_id = $1 AND model_name = $2
+ORDER BY id
+LIMIT 1
+FOR UPDATE`, userID, modelName)
+	if err != nil {
+		_ = sess.Rollback()
+		return err
+	}
+	if len(rows) == 0 {
+		if _, err := sess.Exec(
+			"INSERT INTO user_model_credits (user_id, model_name, credits, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())",
+			userID, modelName, credits,
+		); err != nil {
+			_ = sess.Rollback()
+			return err
+		}
+	} else {
+		id, _ := strconv.ParseInt(rows[0]["id"], 10, 64)
+		if _, err := sess.Exec(
+			"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE id = $2",
+			credits, id,
+		); err != nil {
+			_ = sess.Rollback()
+			return err
+		}
+	}
+	if err := sess.Commit(); err != nil {
+		return err
+	}
+	_, err = SyncModelCreditToRedis(ctx, userID, modelName)
+	return err
 }
 
 // AddModelCredit 增加模型专属积分（管理员赠送）。DB 是权威数据，Redis 随后同步。
@@ -142,32 +166,47 @@ func AddModelCredit(ctx context.Context, userID int64, modelName string, credits
 	if credits <= 0 {
 		return fmt.Errorf("积分数量必须大于 0")
 	}
-	// 先尝试 UPDATE，若记录不存在（0 行）则 INSERT；比 ON CONFLICT 更兼容（不依赖约束是否已建）
-	result, err := db.Engine.Exec(
-		"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE user_id = $2 AND model_name = $3",
-		credits, userID, modelName,
-	)
-	if err != nil {
+	sess := db.Engine.NewSession()
+	defer sess.Close()
+	if err := sess.Begin(); err != nil {
 		return err
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		_, err = db.Engine.Exec(
+	if _, err := sess.Exec("SELECT pg_advisory_xact_lock($1)", modelCreditLockID(userID, modelName)); err != nil {
+		_ = sess.Rollback()
+		return err
+	}
+	rows, err := sess.QueryString(`
+SELECT id
+FROM user_model_credits
+WHERE user_id = $1 AND model_name = $2
+ORDER BY id
+LIMIT 1
+FOR UPDATE`, userID, modelName)
+	if err != nil {
+		_ = sess.Rollback()
+		return err
+	}
+	if len(rows) == 0 {
+		if _, err = sess.Exec(
 			"INSERT INTO user_model_credits (user_id, model_name, credits, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())",
 			userID, modelName, credits,
-		)
-		if err != nil {
-			// 并发场景下可能已被其他请求插入，退化为再次 UPDATE
-			_, err = db.Engine.Exec(
-				"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE user_id = $2 AND model_name = $3",
-				credits, userID, modelName,
-			)
-			if err != nil {
-				return err
-			}
+		); err != nil {
+			_ = sess.Rollback()
+			return err
+		}
+	} else {
+		id, _ := strconv.ParseInt(rows[0]["id"], 10, 64)
+		if _, err = sess.Exec(
+			"UPDATE user_model_credits SET credits = credits + $1, updated_at = NOW() WHERE id = $2",
+			credits, id,
+		); err != nil {
+			_ = sess.Rollback()
+			return err
 		}
 	}
-	// 同步 Redis
+	if err := sess.Commit(); err != nil {
+		return err
+	}
 	_, err = SyncModelCreditToRedis(ctx, userID, modelName)
 	return err
 }

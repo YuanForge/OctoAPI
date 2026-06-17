@@ -43,7 +43,7 @@ func AgentListUsers(c *gin.Context) {
 SELECT
 u.id, u.username, u.email, u.balance,
 COALESCE((SELECT SUM(credits) FROM billing_transactions WHERE user_id = u.id AND type = 'recharge'), 0) AS total_recharge,
-COALESCE((SELECT SUM(credits) FROM billing_transactions WHERE user_id = u.id AND type IN ('charge','hold','settle')), 0) AS total_spend
+COALESCE((SELECT SUM(CASE WHEN type IN ('charge','hold','settle') THEN credits WHEN type = 'refund' THEN -credits ELSE 0 END) FROM billing_transactions WHERE user_id = u.id), 0) AS total_spend
 FROM users u
 WHERE u.inviter_id = $1
 ORDER BY u.balance ASC

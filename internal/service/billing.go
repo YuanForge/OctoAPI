@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	"fanapi/internal/billing"
 	"fanapi/internal/db"
@@ -18,14 +21,22 @@ import (
 // modelCreditCharged 为本次从专属模型积分中扣除的数量（0 表示全部来自通用余额）。
 // DB 仅更新通用余额（users.balance），模型积分存储在 user_model_credits 表中。
 //
-// 余额同步策略：
-//   - "hold"/"settle"/"charge"/"refund"：调用方必须先成功操作 Redis，WriteTx 只记录流水；
-//     PostgreSQL users.balance 由 Redis->DB 后台同步器按最终 Redis 余额写回。
-//   - "recharge"/"adjust"：先在 DB 原子更新余额，再增量同步到 Redis。
+// 余额策略：
+//   - "hold"/"settle"/"charge"/"refund"：调用方必须先成功操作 Redis 授权额度；
+//     WriteTx 在同一 DB 事务中写流水并同步扣减/返还 billing_quota_leases.remaining_credits。
+//   - "recharge"/"adjust"：先在 DB 原子更新 users.balance，再增量同步余额缓存。
 func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, corrID, txType string, credits, cost, modelCreditCharged int64, metrics model.JSON) error {
+	if metrics == nil {
+		metrics = model.JSON{}
+	}
 	taskID := metricInt64(metrics, "task_id")
 	llmLogID := metricInt64(metrics, "llm_log_id")
 	skipRedisSync := metricBool(metrics, "skip_redis_sync")
+	refundRetryJob := txType == "refund" && metricBool(metrics, "refund_retry_job")
+	refundDedupeKey := ""
+	if txType == "refund" {
+		refundDedupeKey = ensureRefundDedupeKey(userID, corrID, credits, cost, modelCreditCharged, metrics)
+	}
 	tx := &model.BillingTransaction{
 		UserID:             userID,
 		ChannelID:          channelID,
@@ -65,22 +76,35 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 		if skipRedisSync || !redisPreApplied || delta == 0 {
 			return
 		}
-		if err := billing.ApplyBalanceDelta(context.Background(), userID, -delta); err != nil {
-			log.Printf("[billing] redis compensation failed user=%d type=%s corr_id=%s delta=%d reason=%s err=%v",
+		if err := billing.ApplyQuotaDelta(context.Background(), userID, -delta); err != nil {
+			log.Printf("[billing] quota compensation failed user=%d type=%s corr_id=%s delta=%d reason=%s err=%v",
 				userID, txType, corrID, -delta, reason, err)
-			if markErr := billing.MarkBalanceDirty(context.Background(), userID); markErr != nil {
-				log.Printf("[billing] mark dirty after compensation failure failed user=%d type=%s corr_id=%s err=%v",
-					userID, txType, corrID, markErr)
+		}
+	}
+	handlePreAppliedFailure := func(reason string, cause error) error {
+		if txType == "refund" && redisPreApplied && !refundRetryJob && !skipRedisSync && credits > 0 {
+			if err := enqueueRefundJob(context.Background(), userID, channelID, apiKeyID, poolKeyID, corrID, credits, cost, modelCreditCharged, metrics, refundDedupeKey, cause); err == nil {
+				log.Printf("[billing] refund tx deferred user=%d corr_id=%s credits=%d reason=%s err=%v",
+					userID, corrID, credits, reason, cause)
+				if n, processErr := ProcessBillingRefundJobs(context.Background(), 10); processErr != nil {
+					log.Printf("[billing] immediate refund job retry failed after %d jobs user=%d corr_id=%s err=%v",
+						n, userID, corrID, processErr)
+				}
+				return nil
+			} else {
+				log.Printf("[billing] enqueue refund job failed user=%d corr_id=%s credits=%d reason=%s err=%v queue_err=%v",
+					userID, corrID, credits, reason, cause, err)
 			}
 		}
+		compensateRedis(reason)
+		return cause
 	}
 
 	// 将余额更新与流水插入包在同一事务，避免余额已改但流水缺失
 	sess := db.Engine.NewSession()
 	defer sess.Close()
 	if err := sess.Begin(); err != nil {
-		compensateRedis("begin")
-		return err
+		return handlePreAppliedFailure("begin", err)
 	}
 	if !redisPreApplied && !skipRedisSync && delta != 0 {
 		if _, err := sess.Exec("SELECT pg_advisory_xact_lock($1, $2)", int64(20260617), userID); err != nil {
@@ -92,11 +116,30 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 	}
 
 	if redisPreApplied {
-		if bal, found, err := billing.CachedBalance(ctx, userID); err == nil && found {
+		if txType == "refund" && refundRetryJob && refundDedupeKey != "" {
+			if exists, err := refundTxExists(sess, refundDedupeKey); err != nil {
+				if rbErr := sess.Rollback(); rbErr != nil {
+					log.Printf("[billing] rollback failed: %v", rbErr)
+				}
+				return handlePreAppliedFailure("dedupe_lookup", err)
+			} else if exists {
+				if rbErr := sess.Rollback(); rbErr != nil {
+					log.Printf("[billing] rollback failed: %v", rbErr)
+				}
+				billing.InvalidateBalanceCache(context.Background(), userID)
+				return nil
+			}
+		}
+		if err := billing.ApplyQuotaLeaseTx(sess, userID, txType, generalCredits); err != nil {
+			if rbErr := sess.Rollback(); rbErr != nil {
+				log.Printf("[billing] rollback failed: %v", rbErr)
+			}
+			return handlePreAppliedFailure("quota_lease_update", err)
+		}
+		if bal, err := billing.SpendableBalanceTx(sess, userID); err == nil {
 			tx.BalanceAfter = bal
 		}
 	} else if delta != 0 {
-		// 未预先操作 Redis 的余额变更在 DB 内原子更新；消费/退款类由 Redis→PG 同步器负责写回 DB。
 		rows, err := sess.QueryString(
 			"UPDATE users SET balance = balance + $1 WHERE id = $2 AND balance + $1 >= 0 RETURNING balance",
 			delta, userID,
@@ -115,7 +158,9 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 			compensateRedis("update_no_rows")
 			return fmt.Errorf("用户余额不足或用户不存在")
 		}
-		if balStr, ok := rows[0]["balance"]; ok {
+		if bal, err := billing.SpendableBalanceTx(sess, userID); err == nil {
+			tx.BalanceAfter = bal
+		} else if balStr, ok := rows[0]["balance"]; ok {
 			tx.BalanceAfter, _ = strconv.ParseInt(balStr, 10, 64)
 		}
 	}
@@ -124,8 +169,7 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 		if rbErr := sess.Rollback(); rbErr != nil {
 			log.Printf("[billing] rollback failed: %v", rbErr)
 		}
-		compensateRedis("insert_tx")
-		return err
+		return handlePreAppliedFailure("insert_tx", err)
 	}
 
 	if !skipRedisSync && !redisPreApplied && delta != 0 {
@@ -145,17 +189,12 @@ func WriteTx(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, 
 	}
 
 	if err := sess.Commit(); err != nil {
-		compensateRedis("commit")
-		return err
+		return handlePreAppliedFailure("commit", err)
 	}
 
-	// 未预先操作 Redis 的 DB 余额变更（如充值、手动调账）在事务成功后用增量同步到 Redis。
-	if !skipRedisSync && redisPreApplied {
-		if err := billing.MarkBalanceDirty(context.Background(), userID); err != nil {
-			log.Printf("[billing] mark dirty balance failed user=%d type=%s corr_id=%s err=%v",
-				userID, txType, corrID, err)
-		}
-	}
+	billing.InvalidateBalanceCache(context.Background(), userID)
+
+	// 未预先操作 Redis 的 DB 余额变更（如充值、手动调账）在事务成功后用增量同步到 Redis 缓存。
 	if !skipRedisSync && !redisPreApplied && delta != 0 {
 		if balanceSyncJob == nil {
 			log.Printf("[billing] missing balance sync job user=%d type=%s corr_id=%s delta=%d",
@@ -413,4 +452,240 @@ func CountTransactions(ctx context.Context, userID int64, corrID, taskID string)
 	}
 	count, err := sess.Count(&model.BillingTransaction{})
 	return count, err
+}
+
+func ensureRefundDedupeKey(userID int64, corrID string, credits, cost, modelCreditCharged int64, metrics model.JSON) string {
+	if metrics == nil {
+		metrics = model.JSON{}
+	}
+	if key, _ := metrics["refund_dedupe_key"].(string); key != "" {
+		return key
+	}
+	clean := model.JSON{}
+	for k, v := range metrics {
+		switch k {
+		case "refund_dedupe_key", "refund_retry_job", "skip_redis_sync", "last_error":
+			continue
+		default:
+			clean[k] = v
+		}
+	}
+	payload := map[string]interface{}{
+		"user_id":              userID,
+		"corr_id":              corrID,
+		"credits":              credits,
+		"cost":                 cost,
+		"model_credit_charged": modelCreditCharged,
+		"metrics":              clean,
+	}
+	b, _ := json.Marshal(payload)
+	sum := sha1.Sum(b)
+	key := hex.EncodeToString(sum[:])
+	metrics["refund_dedupe_key"] = key
+	return key
+}
+
+func refundTxExists(sess interface {
+	QueryString(...interface{}) ([]map[string]string, error)
+}, dedupeKey string) (bool, error) {
+	if dedupeKey == "" {
+		return false, nil
+	}
+	rows, err := sess.QueryString(
+		"SELECT id FROM billing_transactions WHERE type = 'refund' AND metrics->>'refund_dedupe_key' = $1 LIMIT 1",
+		dedupeKey,
+	)
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0, nil
+}
+
+func cloneMetrics(metrics model.JSON) model.JSON {
+	out := model.JSON{}
+	for k, v := range metrics {
+		out[k] = v
+	}
+	return out
+}
+
+func enqueueRefundJob(ctx context.Context, userID, channelID, apiKeyID, poolKeyID int64, corrID string, credits, cost, modelCreditRefunded int64, metrics model.JSON, dedupeKey string, cause error) error {
+	if credits <= 0 {
+		return nil
+	}
+	if metrics == nil {
+		metrics = model.JSON{}
+	}
+	if dedupeKey == "" {
+		dedupeKey = ensureRefundDedupeKey(userID, corrID, credits, cost, modelCreditRefunded, metrics)
+	}
+	if dedupeKey != "" {
+		var existing model.BillingRefundJob
+		found, err := db.Engine.Context(ctx).
+			Where("dedupe_key = ? AND dedupe_key != ''", dedupeKey).
+			Get(&existing)
+		if err != nil {
+			return err
+		}
+		if found {
+			if existing.Status == "done" || existing.Status == "pending" {
+				return nil
+			}
+			patch := &model.BillingRefundJob{
+				Status:    "pending",
+				NextRunAt: time.Now(),
+				LastError: fmt.Sprint(cause),
+			}
+			_, err = db.Engine.Context(ctx).
+				ID(existing.ID).
+				Cols("status", "next_run_at", "last_error", "updated_at").
+				Update(patch)
+			return err
+		}
+	}
+	jobMetrics := cloneMetrics(metrics)
+	jobMetrics["refund_retry_job"] = true
+	jobMetrics["skip_redis_sync"] = true
+	if dedupeKey != "" {
+		jobMetrics["refund_dedupe_key"] = dedupeKey
+	}
+	if cause != nil {
+		jobMetrics["deferred_error"] = cause.Error()
+	}
+	job := &model.BillingRefundJob{
+		UserID:              userID,
+		ChannelID:           channelID,
+		APIKeyID:            apiKeyID,
+		PoolKeyID:           poolKeyID,
+		CorrID:              corrID,
+		Credits:             credits,
+		Cost:                cost,
+		ModelCreditRefunded: modelCreditRefunded,
+		Metrics:             jobMetrics,
+		DedupeKey:           dedupeKey,
+		Status:              "pending",
+		NextRunAt:           time.Now(),
+		LastError:           fmt.Sprint(cause),
+	}
+	_, err := db.Engine.Context(ctx).Insert(job)
+	if err != nil && dedupeKey != "" {
+		var existing model.BillingRefundJob
+		found, lookupErr := db.Engine.Context(ctx).
+			Where("dedupe_key = ? AND dedupe_key != ''", dedupeKey).
+			Get(&existing)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if found {
+			return nil
+		}
+	}
+	return err
+}
+
+// StartBillingRefundJobWorker retries refund transactions that were safely
+// applied to the hot quota path but failed to persist on the first attempt.
+func StartBillingRefundJobWorker(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		log.Println("[billing-refund] refund retry worker started")
+		processBillingRefundJobs(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				processBillingRefundJobs(ctx)
+			}
+		}
+	}()
+}
+
+func processBillingRefundJobs(ctx context.Context) {
+	if n, err := ProcessBillingRefundJobs(ctx, 100); err != nil {
+		log.Printf("[billing-refund] process refund jobs failed after %d jobs: %v", n, err)
+	}
+}
+
+func ProcessBillingRefundJobs(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var jobs []model.BillingRefundJob
+	if err := db.Engine.Context(ctx).
+		Where("status = ? AND next_run_at <= ?", "pending", time.Now()).
+		Asc("id").
+		Limit(limit).
+		Find(&jobs); err != nil {
+		return 0, err
+	}
+
+	processed := 0
+	for _, job := range jobs {
+		if err := processBillingRefundJob(ctx, job); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func processBillingRefundJob(ctx context.Context, job model.BillingRefundJob) error {
+	if job.DedupeKey != "" {
+		rows, err := db.Engine.Context(ctx).QueryString(
+			"SELECT id FROM billing_transactions WHERE type = 'refund' AND metrics->>'refund_dedupe_key' = $1 LIMIT 1",
+			job.DedupeKey,
+		)
+		if err != nil {
+			return err
+		}
+		if len(rows) > 0 {
+			_, err = db.Engine.Context(ctx).
+				ID(job.ID).
+				Cols("status", "attempts", "last_error", "updated_at").
+				Update(&model.BillingRefundJob{
+					Status:    "done",
+					Attempts:  job.Attempts + 1,
+					LastError: "",
+				})
+			return err
+		}
+	}
+
+	metrics := cloneMetrics(job.Metrics)
+	metrics["refund_retry_job"] = true
+	metrics["skip_redis_sync"] = true
+	if job.DedupeKey != "" {
+		metrics["refund_dedupe_key"] = job.DedupeKey
+	}
+	err := WriteTx(ctx, job.UserID, job.ChannelID, job.APIKeyID, job.PoolKeyID, job.CorrID, "refund", job.Credits, job.Cost, job.ModelCreditRefunded, metrics)
+	if err != nil {
+		attempts := job.Attempts + 1
+		backoff := time.Duration(attempts*attempts) * time.Second
+		if backoff > 5*time.Minute {
+			backoff = 5 * time.Minute
+		}
+		_, updateErr := db.Engine.Context(ctx).
+			ID(job.ID).
+			Cols("attempts", "next_run_at", "last_error", "updated_at").
+			Update(&model.BillingRefundJob{
+				Attempts:  attempts,
+				NextRunAt: time.Now().Add(backoff),
+				LastError: err.Error(),
+			})
+		if updateErr != nil {
+			return updateErr
+		}
+		return nil
+	}
+	_, err = db.Engine.Context(ctx).
+		ID(job.ID).
+		Cols("status", "attempts", "last_error", "updated_at").
+		Update(&model.BillingRefundJob{
+			Status:    "done",
+			Attempts:  job.Attempts + 1,
+			LastError: "",
+		})
+	return err
 }

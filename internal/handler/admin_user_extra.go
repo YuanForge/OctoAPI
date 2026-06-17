@@ -27,8 +27,8 @@ func GetUserPortrait(c *gin.Context) {
 	var daily []dayRow
 	engine.SQL(
 		`SELECT TO_CHAR(DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Shanghai'), 'MM-DD') AS day,
-		        COALESCE(SUM(credits), 0)::float8 / $3 AS amount
-		 FROM billing_transactions WHERE user_id=$1 AND created_at>=$2 AND type IN ('charge','settle')
+		        COALESCE(SUM(CASE WHEN type IN ('charge','hold','settle') THEN credits WHEN type = 'refund' THEN -credits ELSE 0 END), 0)::float8 / $3 AS amount
+		 FROM billing_transactions WHERE user_id=$1 AND created_at>=$2 AND type IN ('charge','hold','settle','refund')
 		 GROUP BY DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Shanghai')
 		 ORDER BY DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Shanghai')`,
 		id, since, creditsPerCNY,

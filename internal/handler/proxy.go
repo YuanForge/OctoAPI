@@ -251,7 +251,9 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 		pk, pkErr := service.GetOrAssignPoolKey(c.Request.Context(), ch.KeyPoolID, userID)
 		if pkErr != nil {
 			if cost > 0 {
-				_ = billing.Refund(c.Request.Context(), userID, cost-modelCreditCharged)
+				if err := billing.ReleasePreAppliedQuota(c.Request.Context(), userID, cost-modelCreditCharged); err != nil {
+					log.Printf("[proxy-billing] release pre-applied quota failed user_id=%d credits=%d err=%v", userID, cost-modelCreditCharged, err)
+				}
 				if modelCreditCharged > 0 {
 					_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
 				}
@@ -304,7 +306,9 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	}
 	if _, err := db.Engine.Insert(task); err != nil {
 		if cost > 0 {
-			_ = billing.Refund(c.Request.Context(), userID, cost-modelCreditCharged)
+			if err := billing.ReleasePreAppliedQuota(c.Request.Context(), userID, cost-modelCreditCharged); err != nil {
+				log.Printf("[proxy-billing] release pre-applied quota failed user_id=%d credits=%d err=%v", userID, cost-modelCreditCharged, err)
+			}
 			if modelCreditCharged > 0 {
 				_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
 			}

@@ -308,26 +308,30 @@ func llmRefundCredits(c *gin.Context, userID, amount int64) (refunded, modelRefu
 	return refunded, modelRefunded
 }
 
-func recordLLMChargeTx(ctx context.Context, c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID, txType string, credits, upstreamCost, modelCharged int64, metrics model.JSON) {
+func recordLLMChargeTx(ctx context.Context, c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID, txType string, credits, upstreamCost, modelCharged int64, metrics model.JSON) bool {
 	if credits <= 0 {
-		return
+		return true
 	}
 	if err := service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, txType, credits, upstreamCost, modelCharged, metrics); err != nil {
 		log.Printf("[llm-billing] write %s tx failed user_id=%d corr_id=%s credits=%d model_credit=%d err=%v",
 			txType, userID, corrID, credits, modelCharged, err)
 		revertLLMCharge(ctx, c, userID, credits, modelCharged)
+		return false
 	}
+	return true
 }
 
-func recordLLMRefundTx(ctx context.Context, c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID string, credits, upstreamCost, modelRefunded int64, metrics model.JSON) {
+func recordLLMRefundTx(ctx context.Context, c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID string, credits, upstreamCost, modelRefunded int64, metrics model.JSON) bool {
 	if credits <= 0 {
-		return
+		return true
 	}
 	if err := service.WriteTx(ctx, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, "refund", credits, upstreamCost, modelRefunded, metrics); err != nil {
 		log.Printf("[llm-billing] write refund tx failed user_id=%d corr_id=%s credits=%d model_credit=%d err=%v",
 			userID, corrID, credits, modelRefunded, err)
 		revertLLMRefund(ctx, c, userID, credits, modelRefunded)
+		return false
 	}
+	return true
 }
 
 func scaleRefundCost(cost, refunded, requested int64) int64 {
@@ -359,7 +363,7 @@ func revertLLMCharge(ctx context.Context, c *gin.Context, userID, credits, model
 func revertLLMRefund(ctx context.Context, c *gin.Context, userID, credits, modelRefunded int64) {
 	generalRefunded := credits - modelRefunded
 	if generalRefunded > 0 {
-		// WriteTx already compensates the Redis general balance for failed pre-applied refunds.
+		// WriteTx compensates the Redis general quota when a refund cannot be queued.
 		adjustContextCounter(c, "model_credit_general_charged", generalRefunded)
 	}
 	if modelRefunded > 0 {
@@ -396,6 +400,30 @@ func adjustContextCounter(c *gin.Context, key string, delta int64) {
 		next = 0
 	}
 	c.Set(key, next)
+}
+
+func refundLLMHoldForRetry(c *gin.Context, userID, channelID, apiKeyIDVal, poolKeyIDVal int64, corrID string, totalHold, upstreamCostHold int64, reason string) bool {
+	if totalHold <= 0 {
+		return true
+	}
+	refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
+	if refunded <= 0 {
+		msg := fmt.Sprintf("重试前退款失败，预扣未退回：corr_id=%s user_id=%d hold=%d", corrID, userID, totalHold)
+		log.Printf("[llm-billing] %s", msg)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重试前退款失败，请稍后重试"})
+		return false
+	}
+	if !recordLLMRefundTx(c.Request.Context(), c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": reason}) {
+		log.Printf("[llm-billing] retry refund tx failed corr_id=%s user_id=%d refunded=%d hold=%d", corrID, userID, refunded, totalHold)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重试前退款流水写入失败，请稍后重试"})
+		return false
+	}
+	if refunded != totalHold {
+		log.Printf("[llm-billing] retry refund partial corr_id=%s user_id=%d refunded=%d hold=%d", corrID, userID, refunded, totalHold)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重试前预扣未全额退回，请稍后重试"})
+		return false
+	}
+	return true
 }
 
 func llmRefundAndAbort(c *gin.Context, corrID string, userID, credits, upstreamCost, poolKeyIDVal int64, upstreamStatus int, errMsg string) {

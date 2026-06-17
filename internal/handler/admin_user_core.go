@@ -70,6 +70,7 @@ func ListUsers(c *gin.Context) {
 	whereClauses := []string{"1=1"}
 	args := []interface{}{}
 	argIdx := 1
+	balanceExpr := "u.balance + COALESCE((SELECT SUM(remaining_credits) FROM billing_quota_leases WHERE user_id = u.id AND status = 'active' AND expires_at > NOW()), 0)"
 
 	if email := c.Query("email"); email != "" {
 		whereClauses = append(whereClauses, "u.email ILIKE $"+strconv.Itoa(argIdx))
@@ -96,14 +97,14 @@ func ListUsers(c *gin.Context) {
 	}
 	if balMin := c.Query("balance_min"); balMin != "" {
 		if v, err := strconv.ParseInt(balMin, 10, 64); err == nil {
-			whereClauses = append(whereClauses, "u.balance >= $"+strconv.Itoa(argIdx))
+			whereClauses = append(whereClauses, balanceExpr+" >= $"+strconv.Itoa(argIdx))
 			args = append(args, v*1_000_000)
 			argIdx++
 		}
 	}
 	if balMax := c.Query("balance_max"); balMax != "" {
 		if v, err := strconv.ParseInt(balMax, 10, 64); err == nil {
-			whereClauses = append(whereClauses, "u.balance <= $"+strconv.Itoa(argIdx))
+			whereClauses = append(whereClauses, balanceExpr+" <= $"+strconv.Itoa(argIdx))
 			args = append(args, v*1_000_000)
 			argIdx++
 		}
@@ -134,7 +135,7 @@ func ListUsers(c *gin.Context) {
 
 	sql := `
 SELECT
-  u.id, u.username, u.email, u.role, u."group", u.balance, u.is_active, u.frozen_reason, u.rebate_ratio, u.created_at,
+  u.id, u.username, u.email, u.role, u."group", ` + balanceExpr + ` AS balance, u.is_active, u.frozen_reason, u.rebate_ratio, u.created_at,
   COALESCE((SELECT COUNT(*) FROM users WHERE inviter_id = u.id), 0) AS invite_count,
   COALESCE((SELECT SUM(CASE WHEN type IN ('charge','hold','settle') THEN credits WHEN type = 'refund' THEN -credits ELSE 0 END) FROM billing_transactions WHERE user_id = u.id), 0) AS total_spent
 FROM users u

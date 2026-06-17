@@ -749,8 +749,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 			if nextCh := selectNextChannel(c.Request.Context(), routingKey, triedIDs, stableChannels, isResponsesCompact); nextCh != nil {
 				// 退回已扣的 hold
 				if totalHold > 0 {
-					refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
-					recordLLMRefundTx(c.Request.Context(), c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "channel_retry"})
+					if !refundLLMHoldForRetry(c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, totalHold, upstreamCostHold, "channel_retry") {
+						return
+					}
 					enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry"})
 				}
 				llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
@@ -806,8 +807,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 		if shouldRetry && len(triedIDs) < maxRetries {
 			if nextCh := selectNextChannel(c.Request.Context(), routingKey, triedIDs, stableChannels, isResponsesCompact); nextCh != nil {
 				if totalHold > 0 {
-					refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
-					recordLLMRefundTx(c.Request.Context(), c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "channel_retry"})
+					if !refundLLMHoldForRetry(c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, totalHold, upstreamCostHold, "channel_retry") {
+						return
+					}
 					retryMsg := "channel retry"
 					if bizErr != "" {
 						retryMsg = "channel retry: " + bizErr
@@ -875,8 +877,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 				if len(triedIDs) < maxRetries {
 					if nextCh := selectNextChannel(c.Request.Context(), routingKey, triedIDs, stableChannels, isResponsesCompact); nextCh != nil {
 						if totalHold > 0 {
-							refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
-							recordLLMRefundTx(c.Request.Context(), c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "channel_retry"})
+							if !refundLLMHoldForRetry(c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, totalHold, upstreamCostHold, "channel_retry") {
+								return
+							}
 							enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
 						}
 						llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
@@ -954,8 +957,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 						if len(triedIDs) < maxRetries {
 							if nextCh := selectNextChannel(c.Request.Context(), routingKey, triedIDs, stableChannels, isResponsesCompact); nextCh != nil {
 								if totalHold > 0 {
-									refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
-									recordLLMRefundTx(c.Request.Context(), c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "channel_retry"})
+									if !refundLLMHoldForRetry(c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, totalHold, upstreamCostHold, "channel_retry") {
+										return
+									}
 									enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
 								}
 								llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)
@@ -984,8 +988,9 @@ func llmProxyWithChannel(c *gin.Context, ch *model.Channel, reqData map[string]i
 						if len(triedIDs) < maxRetries {
 							if nextCh := selectNextChannel(c.Request.Context(), routingKey, triedIDs, stableChannels, isResponsesCompact); nextCh != nil {
 								if totalHold > 0 {
-									refunded, mcRefunded := llmRefundCredits(c, userID, totalHold)
-									recordLLMRefundTx(c.Request.Context(), c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, refunded, scaleRefundCost(upstreamCostHold, refunded, totalHold), mcRefunded, model.JSON{"reason": "channel_retry"})
+									if !refundLLMHoldForRetry(c, userID, channelID, apiKeyIDVal, poolKeyIDVal, corrID, totalHold, upstreamCostHold, "channel_retry") {
+										return
+									}
 									enqueueLLMLogPatch(corrID, []string{"status", "error_msg"}, model.LLMLog{Status: "error", ErrorMsg: "channel retry: " + bizErr})
 								}
 								llmProxyWithChannel(c, nextCh, origReqData, userID, apiKeyIDVal, userGroup, triedIDs, stableChannels)

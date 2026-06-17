@@ -71,6 +71,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	billing.StartBalanceSyncer(ctx)
+	service.StartBillingRefundJobWorker(ctx)
 	handler.StartLLMLogBatchWriter(ctx)
 	taskresult.StartBatchWriter(ctx)
 	taskresult.StartPoller(ctx)

@@ -244,6 +244,7 @@ func handleResult(msg *nats.Msg) {
 						_ = msg.Ack()
 						return
 					}
+					updateTaskCreditsCharged(ctx, res.TaskID, res.CreditsCharged-refundedOld)
 				}
 
 				var userGroup string
@@ -470,7 +471,20 @@ func failTaskDB(ctx context.Context, taskID, userID, channelID, apiKeyID int64, 
 		revertTaskRefund(ctx, userID, taskID, credits, mcCharged, routingKey)
 		return
 	}
+	updateTaskCreditsCharged(ctx, taskID, credits-refunded)
 	log.Printf("[result-proc] task %d: refunded %d credits (model_credit=%d) to user %d", taskID, credits, mcCharged, userID)
+}
+
+func updateTaskCreditsCharged(ctx context.Context, taskID, credits int64) {
+	if credits < 0 {
+		credits = 0
+	}
+	if _, err := db.Engine.Context(ctx).
+		Where("id = ?", taskID).
+		Cols("credits_charged").
+		Update(&model.Task{CreditsCharged: credits}); err != nil {
+		log.Printf("[result-proc] task %d: update credits_charged failed: %v", taskID, err)
+	}
 }
 
 func revertTaskRefund(ctx context.Context, userID, taskID, credits, modelRefunded int64, routingKey string) {

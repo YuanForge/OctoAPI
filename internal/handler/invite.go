@@ -91,9 +91,9 @@ func ConvertFrozenBalance(c *gin.Context) {
 		return
 	}
 
-	// 原子操作：减少 frozen_balance，增加可用余额（Redis + DB）
+	// 原子操作：减少 frozen_balance，增加可用余额。Redis 只作为缓存，失败不影响账务。
 	n, err := db.Engine.Exec(
-		"UPDATE users SET frozen_balance = frozen_balance - $1 WHERE id = $2 AND frozen_balance >= $1",
+		"UPDATE users SET frozen_balance = frozen_balance - $1, balance = balance + $1 WHERE id = $2 AND frozen_balance >= $1",
 		toConvert, userID,
 	)
 	if err != nil {
@@ -106,13 +106,7 @@ func ConvertFrozenBalance(c *gin.Context) {
 		return
 	}
 
-	// 加入 Redis 余额（Refund 实际是向余额增加积分）
-	if err := billing.Refund(c.Request.Context(), userID, toConvert); err != nil {
-		// Redis 失败回滚 DB
-		db.Engine.Exec("UPDATE users SET frozen_balance = frozen_balance + $1 WHERE id = $2", toConvert, userID) //nolint:errcheck
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "解冻失败（余额更新），请稍后重试"})
-		return
-	}
+	billing.InvalidateBalanceCache(c.Request.Context(), userID)
 
 	newBalance, _ := billing.GetBalance(c.Request.Context(), userID)
 	c.JSON(http.StatusOK, gin.H{
@@ -145,7 +139,7 @@ func GetInviteeList(c *gin.Context) {
 	err := db.Engine.SQL(`
 		SELECT u.id, u.username,
 		       COALESCE((SELECT SUM(amount) FROM payment_orders WHERE user_id = u.id AND status = 'paid'), 0)       AS total_recharge,
-		       COALESCE((SELECT SUM(credits) FROM billing_transactions WHERE user_id = u.id AND type IN ('charge','settle')), 0) / 1000000.0 AS total_spend,
+		       COALESCE((SELECT SUM(CASE WHEN type IN ('charge','hold','settle') THEN credits WHEN type = 'refund' THEN -credits ELSE 0 END) FROM billing_transactions WHERE user_id = u.id), 0) / 1000000.0 AS total_spend,
 		       u.created_at
 		FROM users u
 		WHERE u.inviter_id = $1

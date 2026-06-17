@@ -24,7 +24,7 @@ func GetTransactionAggregate(c *gin.Context) {
 
 	engine := db.Engine
 	args := []interface{}{}
-	where := "type IN ('charge','settle')"
+	where := "type IN ('charge','hold','settle','refund')"
 	if startAt != "" {
 		t, _ := parseDateTime(startAt, false)
 		if !t.IsZero() {
@@ -71,9 +71,9 @@ func GetTransactionAggregate(c *gin.Context) {
 	}
 	sql := fmt.Sprintf(
 		`SELECT %s,
-		        SUM(credits)::float8 AS revenue,
-		        SUM(cost)::float8 AS cost,
-		        SUM(credits-cost)::float8 AS profit,
+		        SUM(CASE WHEN type IN ('charge','hold','settle') THEN credits WHEN type = 'refund' THEN -credits ELSE 0 END)::float8 AS revenue,
+		        SUM(CASE WHEN type IN ('charge','hold','settle') THEN cost WHEN type = 'refund' THEN -cost ELSE 0 END)::float8 AS cost,
+		        SUM(CASE WHEN type IN ('charge','hold','settle') THEN credits - cost WHEN type = 'refund' THEN -(credits - cost) ELSE 0 END)::float8 AS profit,
 		        COUNT(*) AS calls
 		 FROM billing_transactions %s
 		 GROUP BY %s ORDER BY revenue DESC LIMIT %d OFFSET %d`,
@@ -129,7 +129,7 @@ func AdjustTransaction(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "balance_after": newBalance})
 }
 
-// POST /admin/transactions/sync-user-balance  按 Redis 余额修正 DB 并写调账流水
+// POST /admin/transactions/sync-user-balance  兼容旧入口：Redis 已不再作为余额权威，不执行自动调账。
 func SyncUserBalanceFromRedis(c *gin.Context) {
 	var req struct {
 		UserID int64  `json:"user_id" binding:"required"`
@@ -139,17 +139,9 @@ func SyncUserBalanceFromRedis(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Reason == "" {
-		req.Reason = "sync balance from redis"
-	}
-
 	redisBalance, found, err := billing.CachedBalance(c.Request.Context(), req.UserID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if !found {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Redis 余额不存在"})
 		return
 	}
 
@@ -158,26 +150,14 @@ func SyncUserBalanceFromRedis(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	delta := redisBalance - dbBalance
-	if delta != 0 {
-		if err := service.WriteTx(c.Request.Context(), req.UserID, 0, 0, 0, "", "adjust", delta, 0, 0, model.JSON{
-			"reason":          req.Reason,
-			"admin_id":        getAdminID(c),
-			"source":          "redis",
-			"redis_balance":   redisBalance,
-			"db_balance":      dbBalance,
-			"skip_redis_sync": true,
-		}); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
+	spendable, _ := service.GetBalance(c.Request.Context(), req.UserID)
 	c.JSON(http.StatusOK, gin.H{
-		"ok":            true,
-		"db_before":     dbBalance,
-		"redis_balance": redisBalance,
-		"delta":         delta,
-		"balance_after": redisBalance,
-		"changed":       delta != 0,
+		"ok":                 true,
+		"changed":            false,
+		"message":            "Redis 不再作为余额权威，未执行 DB 调账",
+		"db_balance":         dbBalance,
+		"legacy_redis_found": found,
+		"legacy_redis_value": redisBalance,
+		"spendable_balance":  spendable,
 	})
 }

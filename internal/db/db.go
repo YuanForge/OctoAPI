@@ -68,6 +68,8 @@ func Init(cfg *config.DBConfig, migrate bool) error {
 		new(model.WithdrawRequest),
 		new(model.UserModelCredit),
 		new(model.BalanceSyncJob),
+		new(model.BillingQuotaLease),
+		new(model.BillingRefundJob),
 		new(model.ChatConversation),
 		// superpower models
 		new(model.CardBatch),
@@ -168,6 +170,30 @@ func ensureIndexes() error {
 			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_balance_sync_jobs_pending
 			ON balance_sync_jobs (id)
 			WHERE status = 'pending'`,
+		},
+		{
+			"idx_billing_quota_leases_active_user",
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_quota_leases_active_user
+			ON billing_quota_leases (user_id, id DESC)
+			WHERE status = 'active'`,
+		},
+		{
+			"idx_billing_quota_leases_expired",
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_quota_leases_expired
+			ON billing_quota_leases (expires_at, id)
+			WHERE status = 'active'`,
+		},
+		{
+			"idx_billing_refund_jobs_pending",
+			`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_refund_jobs_pending
+			ON billing_refund_jobs (next_run_at, id)
+			WHERE status = 'pending'`,
+		},
+		{
+			"idx_billing_refund_jobs_dedupe",
+			`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_refund_jobs_dedupe
+			ON billing_refund_jobs (dedupe_key)
+			WHERE dedupe_key != ''`,
 		},
 		{
 			"idx_llm_logs_user_id_desc",

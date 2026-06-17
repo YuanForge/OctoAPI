@@ -294,12 +294,13 @@ func ProcessBalanceSyncJobs(ctx context.Context, limit int) (int, error) {
 	return processed, nil
 }
 
-// StartBalanceSyncer 后台把 Redis 余额变更同步到 PostgreSQL。
+// StartBalanceSyncer keeps DB-originated balance cache jobs moving and reclaims
+// expired quota leases. Redis no longer writes account balance back to DB.
 func StartBalanceSyncer(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-		log.Println("[billing-sync] redis balance syncer started")
+		log.Println("[billing-sync] balance job and quota lease syncer started")
 		syncDirtyBalances(ctx)
 		for {
 			select {
@@ -316,25 +317,14 @@ func syncDirtyBalances(ctx context.Context) {
 	if n, err := ProcessBalanceSyncJobs(ctx, 100); err != nil {
 		log.Printf("[billing-sync] process db->redis balance jobs failed after %d jobs: %v", n, err)
 	}
-	for {
-		n, err := SyncDirtyBalancesToDB(ctx, 1000)
-		if err != nil {
-			log.Printf("[billing-sync] sync dirty balances failed: %v", err)
-			return
-		}
-		if n < 1000 {
-			return
-		}
+	if n, err := ReclaimExpiredQuotaLeases(ctx, 100); err != nil {
+		log.Printf("[billing-sync] reclaim expired quota leases failed after %d leases: %v", n, err)
 	}
 }
 
-// GetBalance 返回 Redis 缓存的余额，缓存未命中时自动从 DB 同步。
+// GetBalance returns spendable balance: free DB balance plus active authorized quota.
 func GetBalance(ctx context.Context, userID int64) (int64, error) {
-	val, err := cache.Client.Get(ctx, balanceKey(userID)).Int64()
-	if err == nil {
-		return val, nil
-	}
-	return SyncBalanceToRedis(ctx, userID)
+	return SpendableBalance(ctx, userID)
 }
 
 // luaCharge 原子地扣减 credits，余额不足时返回失败。
@@ -345,22 +335,26 @@ if bal < tonumber(ARGV[1]) then return -1 end
 return redis.call("DECRBY", KEYS[1], ARGV[1])
 `)
 
-// Charge 原子扣减 credits。余额不足时返回错误。
-// Lua 脚本在键不存在时返回 -2；此时从 DB 同步余额后重试一次，
-// 避免在热路径上额外发起一次 GET。
+// Charge atomically consumes already-authorized quota. If the quota bucket is
+// short, it first reserves a small chunk from DB balance into the Redis quota.
 func Charge(ctx context.Context, userID, credits int64) error {
 	if credits <= 0 {
 		return nil
 	}
-	key := balanceKey(userID)
+	if err := ensureQuota(ctx, userID, credits); err != nil {
+		return err
+	}
+	key := quotaKey(userID)
 	result, err := luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
 	if err != nil {
 		return err
 	}
 	if result == -2 {
-		// Redis 键不存在：从 DB 同步后重试
-		if _, syncErr := SyncBalanceToRedis(ctx, userID); syncErr != nil {
+		if _, syncErr := SyncQuotaToRedis(ctx, userID); syncErr != nil {
 			return syncErr
+		}
+		if err := ensureQuota(ctx, userID, credits); err != nil {
+			return err
 		}
 		result, err = luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
 		if err != nil {
@@ -368,31 +362,40 @@ func Charge(ctx context.Context, userID, credits int64) error {
 		}
 	}
 	if result == -1 {
-		return fmt.Errorf("余额不足")
+		if err := reserveQuota(ctx, userID, credits, "charge_retry"); err != nil {
+			return err
+		}
+		result, err = luaCharge.Run(ctx, cache.Client, []string{key}, credits).Int64()
+		if err != nil {
+			return err
+		}
+		if result < 0 {
+			return fmt.Errorf("余额不足")
+		}
 	}
 	if result == -2 {
-		return fmt.Errorf("余额记录异常，请联系管理员")
+		return fmt.Errorf("授权额度异常，请联系管理员")
 	}
-	_ = MarkBalanceDirty(ctx, userID)
+	_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
 	return nil
 }
 
-// Refund 退还 credits（用于 LLM 输出实际量少于预扣时的差额退款）。
+// Refund returns credits to the authorized quota bucket. The matching
+// billing transaction later mirrors this into the DB lease.
 func Refund(ctx context.Context, userID, credits int64) error {
 	if credits <= 0 {
 		return nil
 	}
-	key := balanceKey(userID)
-	// 确保 Redis 键存在，避免 IncrBy 在键不存在时创建只含退款金额的新键
-	// （正确行为应为：实际余额 + 退款金额）。
-	if _, err := cache.Client.Get(ctx, key).Int64(); err != nil {
-		if _, syncErr := SyncBalanceToRedis(ctx, userID); syncErr != nil {
-			return syncErr
-		}
+	if err := ensureRefundQuotaLease(ctx, userID); err != nil {
+		return err
+	}
+	key := quotaKey(userID)
+	if _, err := quotaRemaining(ctx, userID); err != nil {
+		return err
 	}
 	if err := cache.Client.IncrBy(ctx, key, credits).Err(); err != nil {
 		return err
 	}
-	_ = MarkBalanceDirty(ctx, userID)
+	_ = cache.Client.Expire(ctx, key, quotaLeaseTTL).Err()
 	return nil
 }
