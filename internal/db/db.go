@@ -171,10 +171,10 @@ func ensureIndexes() error {
 		{
 			"idx_billing_tx_refund_dedupe",
 			`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_tx_refund_dedupe
-			ON billing_transactions ((metrics->>'refund_dedupe_key'))   -- 改为 billing_transactions
-			WHERE type = 'refund'
-			AND metrics ? 'refund_dedupe_key'
-			AND metrics->>'refund_dedupe_key' != ''`,
+			ON billing_transactions ((metrics->>''refund_dedupe_key''))
+			WHERE type = ''refund''
+			AND metrics ? ''refund_dedupe_key''
+			AND metrics->>''refund_dedupe_key'' != ''''`,
 		},
 		{
 			"idx_billing_tx_consumption_dedupe",
