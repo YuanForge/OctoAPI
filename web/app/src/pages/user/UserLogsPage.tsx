@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { FileClockIcon, Loader2, Search } from 'lucide-react'
 
 import { useAsync } from '@/hooks/use-async'
-import { DateRangeFilter } from '@/components/shared/DateRangeFilter'
+import { DateRangeFilter, formatDateTimeFilterValue } from '@/components/shared/DateRangeFilter'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { TableEmpty } from '@/components/shared/TableEmpty'
+import { TablePagination } from '@/components/shared/TablePagination'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -56,24 +57,18 @@ export function UserLogsPage() {
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [filters, setFilters] = useState({ model: '', status: '', startAt: '', endAt: '' })
+  const [queryParams, setQueryParams] = useState<Record<string, string | number>>({ page: 1, page_size: pageSize })
 
   const { data, loading, error, reload } = useAsync(async () => {
-    const params: Record<string, string | number> = { page, page_size: pageSize }
-    if (filters.model) params.model = filters.model
-    if (filters.status) params.status = filters.status
-    if (filters.startAt) params.start_at = filters.startAt.replace('T', ' ') + ':00'
-    if (filters.endAt) params.end_at = filters.endAt.replace('T', ' ') + ':00'
-
-    const res = await userApi.listLogs(params)
+    const res = await userApi.listLogs(queryParams)
     return {
       logs: (Array.isArray(res) ? res : res.items ?? res.logs ?? []) as UserLog[],
       total: (res && !Array.isArray(res) ? res.total : 0) as number,
     }
-  }, { logs: [] as UserLog[], total: 0 })
+  }, { logs: [] as UserLog[], total: 0 }, [queryParams])
 
   const rows = data.logs
   const total = data.total
-  const totalPages = Math.ceil(total / pageSize)
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentLog, setCurrentLog] = useState<UserLog | null>(null)
@@ -98,14 +93,24 @@ export function UserLogsPage() {
   }
 
   function handleSearch() {
+    const params: Record<string, string | number> = { page: 1, page_size: pageSize }
+    if (filters.model) params.model = filters.model
+    if (filters.status) params.status = filters.status
+    if (filters.startAt) params.start_at = formatDateTimeFilterValue(filters.startAt)
+    if (filters.endAt) params.end_at = formatDateTimeFilterValue(filters.endAt)
     setPage(1)
-    setTimeout(reload, 0)
+    setQueryParams(params)
   }
 
   function handleReset() {
     setFilters({ model: '', status: '', startAt: '', endAt: '' })
     setPage(1)
-    setTimeout(reload, 0)
+    setQueryParams({ page: 1, page_size: pageSize })
+  }
+
+  function changePage(next: number) {
+    setPage(next)
+    setQueryParams((current) => ({ ...current, page: next }))
   }
 
   return (
@@ -246,34 +251,10 @@ export function UserLogsPage() {
             </TableBody>
           )}
         </Table>
-        {totalPages > 0 ? (
-          <div className="flex items-center justify-between border-t px-4 py-4">
+        {total > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-4">
             <div className="text-sm text-muted-foreground">共 {total} 条数据</div>
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => {
-                  setPage((current) => current - 1)
-                  setTimeout(reload, 0)
-                }}
-              >
-                上一页
-              </Button>
-              <div className="text-sm">第 {page} / {totalPages} 页</div>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() => {
-                  setPage((current) => current + 1)
-                  setTimeout(reload, 0)
-                }}
-              >
-                下一页
-              </Button>
-            </div>
+            <TablePagination current={page} total={total} pageSize={pageSize} onChange={changePage} className="py-0" />
           </div>
         ) : null}
       </Card>

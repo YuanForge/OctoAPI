@@ -6,7 +6,7 @@ type Preset = '今天' | '7 天' | '30 天'
 
 function formatLocal(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function presetRange(p: Preset): { start: string; end: string } {
@@ -20,6 +20,12 @@ function presetRange(p: Preset): { start: string; end: string } {
     start.setDate(start.getDate() - 30)
   }
   return { start: formatLocal(start), end: formatLocal(end) }
+}
+
+export function formatDateTimeFilterValue(value: string) {
+  if (!value) return ''
+  const normalized = value.replace('T', ' ')
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(normalized) ? `${normalized}:00` : normalized
 }
 
 export function DateRangeFilter({
@@ -42,16 +48,18 @@ export function DateRangeFilter({
       {label ? <Label className="text-sm text-muted-foreground">{label}</Label> : null}
       <Input
         type="datetime-local"
+        step={1}
         value={startAt}
         onChange={(e) => onChange({ startAt: e.target.value, endAt })}
-        className="w-[200px]"
+        className="w-[220px]"
       />
       <span className="text-sm text-muted-foreground">至</span>
       <Input
         type="datetime-local"
+        step={1}
         value={endAt}
         onChange={(e) => onChange({ startAt, endAt: e.target.value })}
-        className="w-[200px]"
+        className="w-[220px]"
       />
       <div className="flex gap-1">
         <Button type="button" size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => applyPreset('今天')}>今天</Button>

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ListIcon } from 'lucide-react'
 
-import { DateRangeFilter } from '@/components/shared/DateRangeFilter'
+import { DateRangeFilter, formatDateTimeFilterValue } from '@/components/shared/DateRangeFilter'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { TableEmpty } from '@/components/shared/TableEmpty'
+import { TablePagination } from '@/components/shared/TablePagination'
 import { TableSkeleton } from '@/components/shared/TableSkeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -161,7 +162,6 @@ export function UserTasksPage() {
   }, { tasks: [] as UserTask[], total: 0 }, [queryParams])
 
   const pageSize = 20
-  const totalPages = Math.ceil(data.total / pageSize)
 
   const [detail, setDetail] = useState<UserTask | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -211,8 +211,8 @@ export function UserTasksPage() {
     if (filters.task_id) params.task_id = filters.task_id
     if (filters.type) params.type = filters.type
     if (filters.status) params.status = filters.status
-    if (startAt) params.start_at = startAt.replace('T', ' ') + ':00'
-    if (endAt) params.end_at = endAt.replace('T', ' ') + ':00'
+    if (startAt) params.start_at = formatDateTimeFilterValue(startAt)
+    if (endAt) params.end_at = formatDateTimeFilterValue(endAt)
     setPage(1)
     setQueryParams(params)
   }
@@ -366,14 +366,10 @@ export function UserTasksPage() {
             </TableBody>
           )}
         </Table>
-        {totalPages > 1 ? (
-          <CardContent className="flex items-center justify-between border-t py-3">
+        {data.total > 0 ? (
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 border-t py-3">
             <span className="text-sm text-muted-foreground">共 {data.total} 条记录</span>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => changePage(page - 1)}>上一页</Button>
-              <span className="text-sm text-muted-foreground">第 {page} / {totalPages} 页</span>
-              <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => changePage(page + 1)}>下一页</Button>
-            </div>
+            <TablePagination current={page} total={data.total} pageSize={pageSize} onChange={changePage} className="py-0" />
           </CardContent>
         ) : null}
       </Card>
