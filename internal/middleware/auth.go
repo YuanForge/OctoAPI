@@ -27,9 +27,25 @@ func applyAPIKeyAuth(c *gin.Context, apiKey *model.APIKey) bool {
 	}
 	c.Set("user_id", apiKey.UserID)
 	c.Set("api_key_id", apiKey.ID)
-	c.Set("key_type", apiKey.KeyType)
+	c.Set("key_type", effectiveAPIKeyType(apiKey.KeyType))
 	c.Set("auth_type", "apikey")
 	return true
+}
+
+func effectiveAPIKeyType(keyType string) string {
+	if lowPriceKeysDisabled() {
+		return "stable"
+	}
+	if keyType == "stable" {
+		return "stable"
+	}
+	return "low_price"
+}
+
+func lowPriceKeysDisabled() bool {
+	var setting model.SystemSetting
+	found, _ := db.Engine.Where("key = ?", "show_low_price_key").Cols("value").Get(&setting)
+	return found && strings.EqualFold(strings.TrimSpace(setting.Value), "false")
 }
 
 // Auth supports both X-API-Key header and Authorization: Bearer JWT.
@@ -121,11 +137,8 @@ func Auth(cfg *config.ServerConfig) gin.HandlerFunc {
 						Cols("id", "key_type").
 						Get(&selectedKey); found {
 						keyType := selectedKey.KeyType
-						if keyType == "" {
-							keyType = "low_price"
-						}
 						c.Set("api_key_id", selectedKey.ID)
-						c.Set("key_type", keyType)
+						c.Set("key_type", effectiveAPIKeyType(keyType))
 						c.Set("auth_type", "jwt_with_key")
 					}
 				}

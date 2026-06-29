@@ -20,7 +20,9 @@ func (h *AuthHandler) CreateAPIKey(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.KeyType != "stable" {
+	if getSettingValue("show_low_price_key") == "false" {
+		req.KeyType = "stable"
+	} else if req.KeyType != "stable" {
 		req.KeyType = "low_price"
 	}
 	userID := c.MustGet("user_id").(int64)

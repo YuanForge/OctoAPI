@@ -82,6 +82,10 @@ func invalidateChannelRouteCaches(ctx context.Context, channels ...model.Channel
 	cache.Client.Del(ctx, args...)
 }
 
+func InvalidateChannelRouteCaches(ctx context.Context, channels ...model.Channel) {
+	invalidateChannelRouteCaches(ctx, channels...)
+}
+
 // ListChannels 返回所有渠道（管理员接口）。
 func ListChannels(ctx context.Context) ([]model.Channel, error) {
 	var channels []model.Channel

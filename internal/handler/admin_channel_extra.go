@@ -3,6 +3,7 @@ package handler
 import (
 	"fanapi/internal/db"
 	"fanapi/internal/model"
+	"fanapi/internal/service"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -27,6 +28,11 @@ func BatchUpdateChannels(c *gin.Context) {
 		return
 	}
 	engine := db.Engine
+	var affected []model.Channel
+	if err := engine.In("id", req.IDs).Cols("id", "name", "model", "display_name").Find(&affected); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	switch req.Action {
 	case "toggle_active":
 		_, err := engine.Exec(
@@ -56,6 +62,7 @@ func BatchUpdateChannels(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的 action"})
 		return
 	}
+	service.InvalidateChannelRouteCaches(c.Request.Context(), affected...)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "count": len(req.IDs)})
 }
 
