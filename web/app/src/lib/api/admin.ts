@@ -164,6 +164,7 @@ export type AdminCleanupBase = {
   target: AdminCleanupTarget
   target_label: string
   retention_days: number
+  min_retention_days: number
   cutoff: string
   statuses: string[]
 }
@@ -659,6 +660,8 @@ export const adminApi = {
     http.patch<Record<string, unknown>>(`/admin/channels/${id}/active`, {
       is_active: isActive,
     }),
+  refreshChannelRuntime: (id: number) =>
+    http.post<Record<string, unknown>>(`/admin/channels/${id}/refresh-runtime`, {}),
   deleteChannel: (id: number) =>
     http.delete<Record<string, unknown>>(`/admin/channels/${id}`),
   previewChannelUpstreamCost: (id: number, params: { platform_id: number; model?: string; group?: string; markup?: number }) =>

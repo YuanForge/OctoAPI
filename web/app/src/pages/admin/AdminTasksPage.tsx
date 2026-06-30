@@ -68,6 +68,10 @@ function cleanupTargetLabel(target: AdminCleanupTarget) {
   return target === 'tasks' ? '历史任务' : 'LLM 调用日志'
 }
 
+function cleanupMinRetentionDays(target: AdminCleanupTarget) {
+  return target === 'tasks' ? 30 : 1
+}
+
 function cleanupStatusText(status: string) {
   const labels: Record<string, string> = {
     done: '成功',
@@ -185,7 +189,7 @@ export function AdminTasksPage() {
 
   function cleanupRetentionValid() {
     const days = cleanupRetentionValue()
-    return Number.isInteger(days) && days >= 30
+    return Number.isInteger(days) && days >= cleanupMinRetentionDays(cleanupTarget)
   }
 
   function resetCleanupOutput() {
@@ -195,11 +199,12 @@ export function AdminTasksPage() {
   }
 
   const parsedCleanupRetention = cleanupRetentionValue()
+  const currentCleanupMinRetention = cleanupMinRetentionDays(cleanupTarget)
   const previewIsCurrent = cleanupPreview?.target === cleanupTarget && cleanupPreview?.retention_days === parsedCleanupRetention
 
   async function previewCleanup() {
     if (!cleanupRetentionValid()) {
-      setCleanupError('保留天数不能少于 30 天')
+      setCleanupError(`保留天数不能少于 ${currentCleanupMinRetention} 天`)
       return
     }
     setCleanupLoading(true)
@@ -243,6 +248,7 @@ export function AdminTasksPage() {
         target: res.target,
         target_label: res.target_label,
         retention_days: res.retention_days,
+        min_retention_days: res.min_retention_days,
         cutoff: res.cutoff,
         count: res.remaining,
         statuses: res.statuses,
@@ -395,7 +401,7 @@ export function AdminTasksPage() {
                   <label className="text-xs text-muted-foreground">保留天数</label>
                   <Input
                     className="w-28"
-                    min={30}
+                    min={currentCleanupMinRetention}
                     type="number"
                     value={cleanupRetentionDays}
                     onChange={(e) => {

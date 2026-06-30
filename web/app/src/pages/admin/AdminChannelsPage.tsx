@@ -1,5 +1,5 @@
 import { type FormEvent, useMemo, useRef, useState } from 'react'
-import { CopyIcon, PlusIcon, RotateCcwIcon, SaveIcon, SearchIcon } from 'lucide-react'
+import { CopyIcon, PlusIcon, RefreshCwIcon, RotateCcwIcon, SaveIcon, SearchIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { PageHeader } from '@/components/shared/PageHeader'
@@ -894,6 +894,19 @@ export function AdminChannelsPage() {
     }
   }
 
+  async function refreshChannelRuntime(row: AdminChannel) {
+    if (!row.id) return
+    setMutError('')
+    try {
+      await adminApi.refreshChannelRuntime(row.id)
+      toast.success('Redis 状态已刷新')
+      reload()
+    } catch (err) {
+      const { getApiErrorMessage } = await import('@/lib/api/http')
+      setMutError(getApiErrorMessage(err))
+    }
+  }
+
   async function executeDeleteChannel() {
     if (!pendingDeleteChannel?.id) return
     setMutError('')
@@ -1209,6 +1222,10 @@ export function AdminChannelsPage() {
                           复制
                         </Button>
                         <Button size="sm" variant="outline" onClick={() => setLogChannel(row)}>日志</Button>
+                        <Button size="sm" variant="outline" onClick={() => refreshChannelRuntime(row)}>
+                          <RefreshCwIcon data-icon="inline-start" />
+                          刷新
+                        </Button>
                         <Button size="sm" variant="outline" onClick={() => toggleChannel(row)}>
                           {row.is_active === false ? '启用' : '停用'}
                         </Button>

@@ -14,27 +14,29 @@ import (
 )
 
 const (
-	cleanupMinRetentionDays = 30
 	cleanupDefaultBatchSize = 1000
 	cleanupMaxRowsPerRun    = 50000
 )
 
 type cleanupTargetConfig struct {
-	Table    string
-	Label    string
-	Statuses []string
+	Table            string
+	Label            string
+	Statuses         []string
+	MinRetentionDays int
 }
 
 var cleanupTargets = map[string]cleanupTargetConfig{
 	"tasks": {
-		Table:    "tasks",
-		Label:    "历史任务",
-		Statuses: []string{"done", "failed"},
+		Table:            "tasks",
+		Label:            "历史任务",
+		Statuses:         []string{"done", "failed"},
+		MinRetentionDays: 30,
 	},
 	"llm_logs": {
-		Table:    "llm_logs",
-		Label:    "LLM 调用日志",
-		Statuses: []string{"ok", "error", "refunded"},
+		Table:            "llm_logs",
+		Label:            "LLM 调用日志",
+		Statuses:         []string{"ok", "error", "refunded"},
+		MinRetentionDays: 1,
 	},
 }
 
@@ -47,7 +49,7 @@ func AdminPreviewCleanup(c *gin.Context) {
 	if !ok {
 		return
 	}
-	retentionDays, ok := parseRetentionDays(c.Query("retention_days"), c)
+	retentionDays, ok := parseRetentionDays(c.Query("retention_days"), cfg, c)
 	if !ok {
 		return
 	}
@@ -62,6 +64,7 @@ func AdminPreviewCleanup(c *gin.Context) {
 		"target":         target,
 		"target_label":   cfg.Label,
 		"retention_days": retentionDays,
+		"min_retention_days": cfg.MinRetentionDays,
 		"cutoff":         cutoff.Format(time.RFC3339),
 		"count":          total,
 		"statuses":       cfg.Statuses,
@@ -91,7 +94,7 @@ func AdminRunCleanup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入确认清理"})
 		return
 	}
-	retentionDays, ok := validateRetentionDays(req.RetentionDays, c)
+	retentionDays, ok := validateRetentionDays(req.RetentionDays, cfg, c)
 	if !ok {
 		return
 	}
@@ -117,6 +120,7 @@ func AdminRunCleanup(c *gin.Context) {
 		"target":         target,
 		"target_label":   cfg.Label,
 		"retention_days": retentionDays,
+		"min_retention_days": cfg.MinRetentionDays,
 		"cutoff":         cutoff.Format(time.RFC3339),
 		"matched":        before,
 		"deleted":        deleted,
@@ -142,18 +146,18 @@ func normalizeCleanupTarget(target string) (string, cleanupTargetConfig, bool) {
 	return normalized, cfg, ok
 }
 
-func parseRetentionDays(raw string, c *gin.Context) (int, bool) {
+func parseRetentionDays(raw string, cfg cleanupTargetConfig, c *gin.Context) (int, bool) {
 	days, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "保留天数格式错误"})
 		return 0, false
 	}
-	return validateRetentionDays(days, c)
+	return validateRetentionDays(days, cfg, c)
 }
 
-func validateRetentionDays(days int, c *gin.Context) (int, bool) {
-	if days < cleanupMinRetentionDays {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("保留天数不能少于 %d 天", cleanupMinRetentionDays)})
+func validateRetentionDays(days int, cfg cleanupTargetConfig, c *gin.Context) (int, bool) {
+	if days < cfg.MinRetentionDays {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("保留天数不能少于 %d 天", cfg.MinRetentionDays)})
 		return 0, false
 	}
 	return days, true
@@ -271,6 +275,7 @@ func writeCleanupAudit(c *gin.Context, target string, cfg cleanupTargetConfig, r
 			"target_label":   cfg.Label,
 			"statuses":       cfg.Statuses,
 			"retention_days": retentionDays,
+			"min_retention_days": cfg.MinRetentionDays,
 			"cutoff":         cutoff.Format(time.RFC3339),
 			"matched":        matched,
 			"deleted":        deleted,

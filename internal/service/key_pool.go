@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"fanapi/internal/cache"
@@ -37,6 +38,86 @@ func (e poolKeyStateError) Unwrap() error { return e.kind }
 
 func newPoolKeyStateError(kind error, format string, args ...interface{}) error {
 	return poolKeyStateError{kind: kind, msg: fmt.Sprintf(format, args...)}
+}
+
+func clearPoolAssignments(ctx context.Context, poolID int64) {
+	if poolID <= 0 {
+		return
+	}
+	pattern := fmt.Sprintf(assignKeyFmt, poolID, 0)
+	pattern = strings.TrimSuffix(pattern, "0") + "*"
+	iter := cache.Client.Scan(ctx, 0, pattern, 200).Iterator()
+	for iter.Next(ctx) {
+		cache.Client.Del(ctx, iter.Val())
+	}
+}
+
+func clearPoolKeyExhaustedState(ctx context.Context, keyIDs ...int64) {
+	if len(keyIDs) == 0 {
+		return
+	}
+	redisKeys := make([]string, 0, len(keyIDs))
+	seen := make(map[int64]struct{}, len(keyIDs))
+	for _, keyID := range keyIDs {
+		if keyID <= 0 {
+			continue
+		}
+		if _, ok := seen[keyID]; ok {
+			continue
+		}
+		seen[keyID] = struct{}{}
+		redisKeys = append(redisKeys, fmt.Sprintf(exhaustedKeyFmt, keyID))
+	}
+	if len(redisKeys) > 0 {
+		cache.Client.Del(ctx, redisKeys...)
+	}
+}
+
+func resetPoolRuntimeState(ctx context.Context, poolID int64) error {
+	if poolID <= 0 {
+		return nil
+	}
+	var keys []model.PoolKey
+	if err := db.Engine.Where("pool_id = ?", poolID).Cols("id").Find(&keys); err != nil {
+		return err
+	}
+	keyIDs := make([]int64, 0, len(keys))
+	for i := range keys {
+		keyIDs = append(keyIDs, keys[i].ID)
+	}
+	clearPoolAssignments(ctx, poolID)
+	clearPoolKeyExhaustedState(ctx, keyIDs...)
+	return nil
+}
+
+func ResetPoolRuntimeState(ctx context.Context, poolID int64) error {
+	return resetPoolRuntimeState(ctx, poolID)
+}
+
+func ResetPoolKeyRuntimeState(ctx context.Context, poolID int64, keyID int64) {
+	clearPoolAssignments(ctx, poolID)
+	clearPoolKeyExhaustedState(ctx, keyID)
+}
+
+func ResetChannelPoolRuntimeState(ctx context.Context, channelID int64) error {
+	if channelID <= 0 {
+		return nil
+	}
+
+	var poolIDs []int64
+	if err := db.Engine.Table("key_pools").
+		Where("channel_id = ?", channelID).
+		Cols("id").
+		Find(&poolIDs); err != nil {
+		return err
+	}
+
+	for _, poolID := range poolIDs {
+		if err := resetPoolRuntimeState(ctx, poolID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetOrAssignPoolKey 返回分配给 entityID 的三方 PoolKey（Sticky Assignment）。
@@ -180,6 +261,9 @@ func ListKeyPools(ctx context.Context, channelID int64) ([]model.KeyPool, error)
 // CreateKeyPool 创建一个新号池。
 func CreateKeyPool(ctx context.Context, pool *model.KeyPool) error {
 	_, err := db.Engine.Insert(pool)
+	if err == nil {
+		clearPoolAssignments(ctx, pool.ID)
+	}
 	return err
 }
 
@@ -194,11 +278,15 @@ func ToggleKeyPool(ctx context.Context, poolID int64) error {
 		return fmt.Errorf("号池 %d 不存在", poolID)
 	}
 	_, err = db.Engine.ID(poolID).Cols("is_active").Update(&model.KeyPool{IsActive: !pool.IsActive})
+	if err == nil {
+		_ = resetPoolRuntimeState(ctx, poolID)
+	}
 	return err
 }
 
 // DeleteKeyPool 删除号池及其所有 Key。
 func DeleteKeyPool(ctx context.Context, poolID int64) error {
+	_ = resetPoolRuntimeState(ctx, poolID)
 	if _, err := db.Engine.Where("pool_id = ?", poolID).Delete(&model.PoolKey{}); err != nil {
 		return err
 	}
@@ -216,11 +304,27 @@ func ListPoolKeys(ctx context.Context, poolID int64) ([]model.PoolKey, error) {
 // AddPoolKey 向号池添加一个三方 Key。
 func AddPoolKey(ctx context.Context, key *model.PoolKey) error {
 	_, err := db.Engine.Insert(key)
+	if err == nil {
+		clearPoolAssignments(ctx, key.PoolID)
+		clearPoolKeyExhaustedState(ctx, key.ID)
+	}
 	return err
 }
 
 // RemovePoolKey 删除号池中的一个 Key。
 func RemovePoolKey(ctx context.Context, keyID int64) error {
-	_, err := db.Engine.ID(keyID).Delete(&model.PoolKey{})
+	var key model.PoolKey
+	found, err := db.Engine.ID(keyID).Cols("id", "pool_id").Get(&key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	_, err = db.Engine.ID(keyID).Delete(&model.PoolKey{})
+	if err == nil {
+		clearPoolAssignments(ctx, key.PoolID)
+		clearPoolKeyExhaustedState(ctx, keyID)
+	}
 	return err
 }

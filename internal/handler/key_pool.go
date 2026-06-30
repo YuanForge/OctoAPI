@@ -194,6 +194,7 @@ func UpdatePoolKey(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
+	service.ResetPoolKeyRuntimeState(c.Request.Context(), key.PoolID, key.ID)
 	c.JSON(http.StatusOK, key)
 }
 

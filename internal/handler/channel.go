@@ -145,6 +145,30 @@ func PatchChannelActive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// POST /admin/channels/:id/refresh-runtime
+func RefreshChannelRuntime(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID 格式错误"})
+		return
+	}
+
+	ch, err := service.GetChannel(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	service.InvalidateChannelCache(c.Request.Context(), id)
+	service.InvalidateChannelRouteCaches(c.Request.Context(), *ch)
+	if err := service.ResetChannelPoolRuntimeState(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "刷新 Redis 状态失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // DELETE /admin/channels/:id
 func DeleteChannel(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

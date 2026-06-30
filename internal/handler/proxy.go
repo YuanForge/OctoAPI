@@ -154,12 +154,13 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	if raw, ok := c.Get("user_group"); ok {
 		userGroup, _ = raw.(string)
 	}
+	channelIDStr := c.Query("channel_id")
 
 	// 渠道解析：优先 channel_id 查询参数（兼容旧客户端），否则用 reqData["model"] 按渠道名路由。
 	var ch *model.Channel
 	var stableChannels []model.Channel // 稳定密钥：按价格排序的候选列表
 
-	if channelIDStr := c.Query("channel_id"); channelIDStr != "" {
+	if channelIDStr != "" {
 		channelID, parseErr := strconv.ParseInt(channelIDStr, 10, 64)
 		if parseErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "channel_id 格式错误"})
@@ -204,6 +205,45 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 	// 捕获用户传入的路由键（用于专属模型积分扣减），必须在模型名覆盖之前保存
 	routingKey, _ := reqData["model"].(string)
 
+	// 先确定最终可用的渠道和号池 Key，稳定密钥允许在号池分配失败时继续尝试更高价渠道。
+	var poolKeyID int64
+	var poolKeyValue string
+	var poolKeyBaseURL string
+	if ch.KeyPoolID > 0 {
+		triedIDs := make([]int64, 0, 4)
+		for {
+			pk, pkErr := service.GetOrAssignPoolKey(c.Request.Context(), ch.KeyPoolID, userID)
+			if pkErr == nil {
+				poolKeyID = pk.ID
+				poolKeyValue = pk.Value
+				poolKeyBaseURL = pk.BaseURLOverride
+				break
+			}
+
+			service.RecordChannelError(c.Request.Context(), channelID)
+			if !isStable || channelIDStr != "" {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "号池分配失败: " + pkErr.Error()})
+				return
+			}
+
+			triedIDs = append(triedIDs, channelID)
+			nextCh := selectNextChannel(c.Request.Context(), routingKey, triedIDs, stableChannels, false)
+			if nextCh == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "号池分配失败: " + pkErr.Error()})
+				return
+			}
+
+			ch = nextCh
+			channelID = ch.ID
+			if ch.KeyPoolID <= 0 {
+				poolKeyID = 0
+				poolKeyValue = ""
+				poolKeyBaseURL = ""
+				break
+			}
+		}
+	}
+
 	// 用渠道配置的真实模型名覆盖用户传入的路由键。
 	if ch.Model != "" {
 		reqData["model"] = ch.Model
@@ -235,29 +275,6 @@ func createTask(c *gin.Context, taskType string, reqData map[string]interface{})
 				return
 			}
 		}
-	}
-
-	// 解析号池 Key（在任务写入前获取，以便后续所有流水记录携带 pool_key_id）
-	var poolKeyID int64
-	var poolKeyValue string
-	var poolKeyBaseURL string
-	if ch.KeyPoolID > 0 {
-		pk, pkErr := service.GetOrAssignPoolKey(c.Request.Context(), ch.KeyPoolID, userID)
-		if pkErr != nil {
-			if cost > 0 {
-				if err := billing.ReleasePreAppliedQuota(c.Request.Context(), userID, cost-modelCreditCharged); err != nil {
-					log.Printf("[proxy-billing] release pre-applied quota failed user_id=%d credits=%d err=%v", userID, cost-modelCreditCharged, err)
-				}
-				if modelCreditCharged > 0 {
-					_ = billing.RefundModelCredit(c.Request.Context(), userID, routingKey, modelCreditCharged)
-				}
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "号池分配失败: " + pkErr.Error()})
-			return
-		}
-		poolKeyID = pk.ID
-		poolKeyValue = pk.Value
-		poolKeyBaseURL = pk.BaseURLOverride
 	}
 
 	// 将平台标准格式原样存入 DB，方便排障；vendor 格式只在 worker 内转换
